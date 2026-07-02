@@ -149,6 +149,29 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcoun
   return ncclEnqueueCheck(&info);
 }
 
+NCCL_API(ncclResult_t, ncclAllGatherFluxSignal, const void* sendbuff, void* recvbuff, size_t sendcount,
+         ncclDataType_t datatype, const ncclFluxAgSignal_t* signal, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t ncclAllGatherFluxSignal(const void* sendbuff, void* recvbuff, size_t sendcount, ncclDataType_t datatype,
+                                     const ncclFluxAgSignal_t* signal, ncclComm_t comm, cudaStream_t stream) {
+  NVTX3_FUNC_WITH_PARAMS(AllGather, NcclNvtxParamsAllGather,
+                         NVTX3_PAYLOAD(comm ? comm->commHash : 0, sendcount * ncclTypeSize(datatype)));
+
+  struct ncclInfo info = {ncclFuncAllGather,
+                          "AllGatherFluxSignal",
+                          sendbuff,
+                          recvbuff,
+                          sendcount,
+                          datatype,
+                          ncclSum,
+                          0,
+                          comm,
+                          stream,
+                          ALLGATHER_CHUNKSTEPS,
+                          ALLGATHER_SLICESTEPS};
+  info.fluxAgSignal = reinterpret_cast<uint64_t>(signal);
+  return ncclEnqueueCheck(&info);
+}
+
 NCCL_API(ncclResult_t, ncclAlltoAll, const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
          ncclComm* comm, cudaStream_t stream);
 ncclResult_t ncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, ncclComm* comm,

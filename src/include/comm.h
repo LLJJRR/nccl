@@ -201,6 +201,7 @@ struct ncclTaskColl {
   ncclRedOp_t opHost;
   struct ncclDevRedOpFull opDev;
   int chunkSteps, sliceSteps;
+  uint64_t fluxAgSignal;
   // Computed later:
   size_t trafficBytes;
   int32_t nMaxChannels:8;

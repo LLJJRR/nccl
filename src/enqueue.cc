@@ -327,6 +327,7 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
     devWork.nWarps = task->nWarps;
     devWork.redOpArg = task->opDev.scalarArg;
     devWork.redOpArgIsPtr = task->opDev.scalarArgIsPtr;
+    devWork.fluxAgSignal = task->fluxAgSignal;
     devWork.oneNode = (comm->nNodes == 1);
     devWork.isOneRPN = comm->isOneRPN;
     devWork.netRegUsed = devWork.regUsed = 0;
@@ -432,13 +433,20 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       struct ncclTaskColl* aggEnd = aggBeg->next;
       struct ncclTaskColl agg = *aggBeg;
       // We aggregate operations that are within 4X size of each other.
-      while (aggEnd != nullptr && aggEnd->trafficBytes < 4 * aggBeg->trafficBytes) {
+      while (aggBeg->fluxAgSignal == 0 && aggEnd != nullptr && aggEnd->fluxAgSignal == 0 &&
+             aggEnd->trafficBytes < 4 * aggBeg->trafficBytes) {
         agg.count += aggEnd->count;
         agg.trafficBytes += aggEnd->trafficBytes;
         aggEnd = aggEnd->next;
       }
 
       NCCLCHECK(ncclGetAlgoInfo(comm, &agg, collNetSupport, nvlsSupport, nTasksPerChannel, simInfo));
+      if (agg.fluxAgSignal != 0) {
+        agg.algorithm = NCCL_ALGO_RING;
+        agg.protocol = NCCL_PROTO_SIMPLE;
+        agg.nMaxChannels = 1;
+        agg.nWarps = std::max(3, comm->maxThreads[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] / WARP_SIZE);
+      }
       agg.devFuncId = ncclDevFuncId(agg.func, agg.opDev.op, agg.datatype, agg.algorithm, agg.protocol);
 
       int isCollnet = 0, isNvls = 0;
@@ -517,6 +525,7 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       devWork.nWarps = task->nWarps;
       devWork.redOpArg = task->opDev.scalarArg;
       devWork.redOpArgIsPtr = task->opDev.scalarArgIsPtr;
+      devWork.fluxAgSignal = task->fluxAgSignal;
       devWork.oneNode = (comm->nNodes == 1);
       devWork.netRegUsed = devWork.regUsed = 0;
       devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
@@ -2740,6 +2749,7 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
     t->opDev = opDev; // C++ struct assignment
     t->chunkSteps = info->chunkSteps;
     t->sliceSteps = info->sliceSteps;
+    t->fluxAgSignal = info->fluxAgSignal;
     t->eActivationMask = ncclProfilerApiState.eActivationMask;
     t->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
     t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;

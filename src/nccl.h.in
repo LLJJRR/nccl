@@ -531,6 +531,27 @@ ncclResult_t  ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcou
 ncclResult_t pncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcount,
     ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
 
+typedef struct ncclFluxAgSignal {
+  int* barrier;      /* Device pointer: Flux AG-GEMM barrier buffer. */
+  int* counters;     /* Reserved device pointer for split/chunk completion counters. */
+  int* launchSignal; /* Optional device pointer signaled when the NCCL kernel starts. */
+  int split;         /* First implementation supports split == 1. */
+} ncclFluxAgSignal_t;
+
+/*
+ * Flux-specific All-Gather variant.
+ *
+ * This experimental extension gathers like ncclAllGather and lets NCCL signal
+ * Flux barrier buffers when receive blocks become available to the local GPU.
+ *
+ * `signal` must be a device-accessible pointer to ncclFluxAgSignal_t, and all
+ * pointer fields inside it must also be device pointers visible to this rank.
+ */
+ncclResult_t  ncclAllGatherFluxSignal(const void* sendbuff, void* recvbuff, size_t sendcount,
+    ncclDataType_t datatype, const ncclFluxAgSignal_t* signal, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pncclAllGatherFluxSignal(const void* sendbuff, void* recvbuff, size_t sendcount,
+    ncclDataType_t datatype, const ncclFluxAgSignal_t* signal, ncclComm_t comm, cudaStream_t stream);
+
 /*
  * All-to-All
  *

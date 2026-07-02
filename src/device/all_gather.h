@@ -10,6 +10,36 @@
 #include "primitives.h"
 
 namespace {
+struct ncclFluxAgSignalDev {
+  int* barrier;
+  int* counters;
+  int* launchSignal;
+  int split;
+};
+
+__device__ __forceinline__ void fluxAgStoreRelease(int* ptr, int value) {
+#if __CUDA_ARCH__ >= 700
+  asm volatile("st.release.sys.global.u32 [%0], %1;" ::"l"(ptr), "r"(value) : "memory");
+#else
+  __threadfence_system();
+  *(volatile int*)ptr = value;
+#endif
+}
+
+__device__ __forceinline__ void fluxAgSignalLaunch(uint64_t signalPtr, int tid) {
+  if (signalPtr == 0 || tid != 0) return;
+  ncclFluxAgSignalDev* signal = reinterpret_cast<ncclFluxAgSignalDev*>(signalPtr);
+  if (signal->launchSignal != nullptr) fluxAgStoreRelease(signal->launchSignal, 1);
+}
+
+__device__ __forceinline__ void fluxAgSignalRankReady(uint64_t signalPtr, int tid, int rankDest) {
+  if (signalPtr == 0 || tid != 0) return;
+  ncclFluxAgSignalDev* signal = reinterpret_cast<ncclFluxAgSignalDev*>(signalPtr);
+  int split = signal->split <= 0 ? 1 : signal->split;
+  if (split != 1 || signal->barrier == nullptr) return;
+  fluxAgStoreRelease(signal->barrier + rankDest, 1);
+}
+
 template <typename T, typename RedOp, typename Proto, bool isNetOffload = false>
 __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWorkColl* work) {
   ncclRing* ring = &ncclShmem.channel.ring;
@@ -24,6 +54,7 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
   int workNthreads;
   T* inputBuf = (T*)work->sendbuff;
   T* outputBuf = (T*)work->recvbuff;
+  fluxAgSignalLaunch(work->fluxAgSignal, tid);
 
   // If isNetOffload == true, we only use 1 warp to drive Ring algo/network communication
   // and the rest of warps proceed to copy src data into dst buffer in parallel when AG
@@ -58,12 +89,14 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
       } else {
         prims.directCopySend(dataOffset, offset, nelem);
       }
+      if (!isNetOffload && elemOffset + chunkCount >= partCount) fluxAgSignalRankReady(work->fluxAgSignal, tid, rankDest);
 
       // k-2 steps: copy to next GPU
       for (int j = 1; j < nranks - 1; ++j) {
         rankDest = ringRanks[nranks - j];
         offset = dataOffset + rankDest * count;
         prims.directRecvCopyDirectSend(offset, offset, nelem);
+        if (elemOffset + chunkCount >= partCount) fluxAgSignalRankReady(work->fluxAgSignal, tid, rankDest);
       }
 
       // Make final copy from buffer to dest.
@@ -72,6 +105,7 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
 
       // Final wait/copy.
       prims.directRecv(offset, nelem);
+      if (elemOffset + chunkCount >= partCount) fluxAgSignalRankReady(work->fluxAgSignal, tid, rankDest);
     }
   } else if (inputBuf != outputBuf + ringRanks[0] * count) {
     inputBuf = inputBuf + partOffset;
@@ -84,7 +118,10 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
   // otherwise, we can have contention if next work will use the outputBuf
   // in this work. We use bar 14 to avoid conflicts with prims barrier and
   // __syncthread().
-  if (isNetOffload) barrier_sync(14, nthreads);
+  if (isNetOffload) {
+    barrier_sync(14, nthreads);
+    fluxAgSignalRankReady(work->fluxAgSignal, tid, ringRanks[0]);
+  }
 }
 } // namespace
 

@@ -38,6 +38,8 @@ struct ncclInfo {
   // WaitSignal descriptors
   int nDesc;
   ncclWaitSignalDesc_t* signalDescs;
+  // Flux AG-GEMM signal config, device pointer to ncclFluxAgSignal_t.
+  uint64_t fluxAgSignal;
 };
 
 #endif
