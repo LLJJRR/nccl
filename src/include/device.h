@@ -308,7 +308,7 @@ struct alignas(16) ncclDevWorkColl {
     } collnet;
   };
   uint64_t redOpArg;
-  uint8_t pad2[8];   // pad struct to multiple of 16
+  uint64_t fluxAgSignal;
 };
 
 
