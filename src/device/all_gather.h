@@ -54,7 +54,8 @@ namespace {
     int workNthreads;
     T *inputBuf = (T*)work->sendbuff;
     T *outputBuf = (T*)work->recvbuff;
-    fluxAgSignalLaunch(work->fluxAgSignal, tid);
+    uint64_t fluxAgSignal = work->redOpArg;
+    fluxAgSignalLaunch(fluxAgSignal, tid);
 
     // If isNetOffload == true, we only use 1 warp to drive Ring algo/network communication
     // and the rest of warps proceed to copy src data into dst buffer in parallel when AG
@@ -86,14 +87,14 @@ namespace {
         } else {
           prims.directCopySend(dataOffset, offset, nelem);
         }
-        if (!isNetOffload && elemOffset + chunkCount >= partCount) fluxAgSignalRankReady(work->fluxAgSignal, tid, rankDest);
+        if (!isNetOffload && elemOffset + chunkCount >= partCount) fluxAgSignalRankReady(fluxAgSignal, tid, rankDest);
 
         // k-2 steps: copy to next GPU
         for (int j = 1; j < nranks - 1; ++j) {
           rankDest = ringRanks[nranks - j];
           offset = dataOffset + rankDest * count;
           prims.directRecvCopyDirectSend(offset, offset, nelem);
-          if (elemOffset + chunkCount >= partCount) fluxAgSignalRankReady(work->fluxAgSignal, tid, rankDest);
+          if (elemOffset + chunkCount >= partCount) fluxAgSignalRankReady(fluxAgSignal, tid, rankDest);
         }
 
         // Make final copy from buffer to dest.
@@ -102,7 +103,7 @@ namespace {
 
         // Final wait/copy.
         prims.directRecv(offset, nelem);
-        if (elemOffset + chunkCount >= partCount) fluxAgSignalRankReady(work->fluxAgSignal, tid, rankDest);
+        if (elemOffset + chunkCount >= partCount) fluxAgSignalRankReady(fluxAgSignal, tid, rankDest);
       }
     } else if (inputBuf != outputBuf + ringRanks[0] * count) {
       inputBuf = inputBuf + partOffset;
@@ -116,7 +117,7 @@ namespace {
     // __syncthread().
     if (isNetOffload) {
       barrier_sync(14, nthreads);
-      fluxAgSignalRankReady(work->fluxAgSignal, tid, ringRanks[0]);
+      fluxAgSignalRankReady(fluxAgSignal, tid, ringRanks[0]);
     }
   }
 }
