@@ -327,7 +327,6 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
     devWork.nWarps = task->nWarps;
     devWork.redOpArg = task->opDev.scalarArg;
     devWork.redOpArgIsPtr = task->opDev.scalarArgIsPtr;
-    devWork.fluxAgSignal = task->fluxAgSignal;
     devWork.oneNode = (comm->nNodes == 1);
     devWork.isOneRPN = comm->isOneRPN;
     devWork.netRegUsed = devWork.regUsed = 0;
@@ -525,7 +524,6 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       devWork.nWarps = task->nWarps;
       devWork.redOpArg = task->opDev.scalarArg;
       devWork.redOpArgIsPtr = task->opDev.scalarArgIsPtr;
-      devWork.fluxAgSignal = task->fluxAgSignal;
       devWork.oneNode = (comm->nNodes == 1);
       devWork.netRegUsed = devWork.regUsed = 0;
       devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
@@ -2750,6 +2748,10 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
     t->chunkSteps = info->chunkSteps;
     t->sliceSteps = info->sliceSteps;
     t->fluxAgSignal = info->fluxAgSignal;
+    if (t->fluxAgSignal != 0) {
+      t->opDev.scalarArg = t->fluxAgSignal;
+      t->opDev.scalarArgIsPtr = false;
+    }
     t->eActivationMask = ncclProfilerApiState.eActivationMask;
     t->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
     t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;
