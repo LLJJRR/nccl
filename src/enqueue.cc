@@ -439,7 +439,6 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       if (agg.fluxAgSignal != 0) {
         agg.algorithm = NCCL_ALGO_RING;
         agg.protocol = NCCL_PROTO_SIMPLE;
-        agg.nMaxChannels = 1;
         agg.nWarps = std::max(3, comm->maxThreads[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] / WARP_SIZE);
       }
       agg.devFuncId = ncclDevFuncId(agg.func, agg.opDev.op, agg.datatype, agg.algorithm, agg.protocol);
