@@ -324,6 +324,7 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
     devWork.nWarps = task->nWarps;
     devWork.redOpArg = task->opDev.scalarArg;
     devWork.redOpArgIsPtr = task->opDev.scalarArgIsPtr;
+    devWork.fluxAgSignal = task->fluxAgSignal != 0;
     devWork.oneNode = (comm->nNodes == 1);
     devWork.isOneRPN = comm->isOneRPN;
     devWork.netRegUsed = devWork.regUsed = 0;
@@ -518,6 +519,7 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       devWork.nWarps = task->nWarps;
       devWork.redOpArg = task->opDev.scalarArg;
       devWork.redOpArgIsPtr = task->opDev.scalarArgIsPtr;
+      devWork.fluxAgSignal = task->fluxAgSignal != 0;
       devWork.oneNode = (comm->nNodes == 1);
       devWork.netRegUsed = devWork.regUsed = 0;
       devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);

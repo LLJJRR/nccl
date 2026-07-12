@@ -10,6 +10,43 @@
 #include "primitives.h"
 
 namespace {
+  struct ncclFluxRsSignalDev {
+    int* barrier;
+    int* counters;
+    int* launchSignal;
+    int split;
+  };
+
+  __device__ __forceinline__ void fluxRsStoreRelease(int* ptr, int value) {
+#if __CUDA_ARCH__ >= 700
+    asm volatile("st.release.sys.global.u32 [%0], %1;" ::"l"(ptr), "r"(value) : "memory");
+#else
+    __threadfence_system();
+    *(volatile int*)ptr = value;
+#endif
+  }
+
+  __device__ __forceinline__ void fluxRsSignalLaunch(uint64_t signalPtr, int tid) {
+    if (signalPtr == 0 || tid != 0) return;
+    ncclFluxRsSignalDev* signal = reinterpret_cast<ncclFluxRsSignalDev*>(signalPtr);
+    if (signal->launchSignal != nullptr) fluxRsStoreRelease(signal->launchSignal, 1);
+  }
+
+  __device__ __forceinline__ void fluxRsSignalRankReady(
+      uint64_t signalPtr, int tid, int rankDest, int expectedCompletions) {
+    if (signalPtr == 0 || tid != 0) return;
+    ncclFluxRsSignalDev* signal = reinterpret_cast<ncclFluxRsSignalDev*>(signalPtr);
+    int split = signal->split <= 0 ? 1 : signal->split;
+    if (split != 1 || signal->barrier == nullptr) return;
+    if (expectedCompletions > 1) {
+      if (signal->counters == nullptr) return;
+      fence_acq_rel_sys();
+      int old = atomicAdd(signal->counters + rankDest, 1);
+      if (old + 1 != expectedCompletions) return;
+    }
+    fluxRsStoreRelease(signal->barrier + rankDest, 1);
+  }
+
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWorkColl* work) {
     ncclRing *ring = &ncclShmem.channel.ring;
@@ -24,6 +61,9 @@ namespace {
     size_t dataOffset;
     uint32_t nelem;
     int rankDest;
+    uint64_t fluxRsSignal = work->fluxAgSignal ? work->redOpArg : 0;
+    int fluxRsExpectedCompletions = work->channelHi - work->channelLo + 1;
+    fluxRsSignalLaunch(fluxRsSignal, tid);
 
     // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
     // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
@@ -52,6 +92,9 @@ namespace {
       rankDest = ringRanks[0];
       offset = dataOffset + rankDest * count;
       prims.recvReduceCopy(offset, dataOffset, nelem, /*postOp=*/true);
+      if (elemOffset + chunkCount >= channelCount) {
+        fluxRsSignalRankReady(fluxRsSignal, tid, rankDest, fluxRsExpectedCompletions);
+      }
     }
   }
 }

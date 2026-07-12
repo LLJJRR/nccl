@@ -551,6 +551,22 @@ ncclResult_t pncclAllGatherFluxSignal(const void* sendbuff, void* recvbuff, size
     ncclDataType_t datatype, const ncclFluxAgSignal_t* signal, ncclComm_t comm, cudaStream_t stream);
 
 /*
+ * Flux-specific Reduce-Scatter variant.
+ *
+ * This experimental extension reduces/scatters like ncclReduceScatter and lets
+ * NCCL signal Flux barrier buffers when the local receive block is available.
+ *
+ * `signal` must be a device-accessible pointer to ncclFluxAgSignal_t, and all
+ * pointer fields inside it must also be device pointers visible to this rank.
+ */
+ncclResult_t  ncclReduceScatterFluxSignal(const void* sendbuff, void* recvbuff,
+    size_t recvcount, ncclDataType_t datatype, ncclRedOp_t op,
+    const ncclFluxAgSignal_t* signal, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t pncclReduceScatterFluxSignal(const void* sendbuff, void* recvbuff,
+    size_t recvcount, ncclDataType_t datatype, ncclRedOp_t op,
+    const ncclFluxAgSignal_t* signal, ncclComm_t comm, cudaStream_t stream);
+
+/*
  * All-to-All
  *
  * Each device sends count values to all other devices and receives count values

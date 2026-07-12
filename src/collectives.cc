@@ -194,6 +194,22 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff, size_t recv
   return ncclEnqueueCheck(&info);
 }
 
+NCCL_API(ncclResult_t, ncclReduceScatterFluxSignal, const void* sendbuff, void* recvbuff,
+    size_t recvcount, ncclDataType_t datatype, ncclRedOp_t op,
+    const ncclFluxAgSignal_t* signal, ncclComm_t comm, cudaStream_t stream);
+ncclResult_t ncclReduceScatterFluxSignal(const void* sendbuff, void* recvbuff,
+    size_t recvcount, ncclDataType_t datatype, ncclRedOp_t op,
+    const ncclFluxAgSignal_t* signal, ncclComm_t comm, cudaStream_t stream) {
+  NVTX3_FUNC_WITH_PARAMS(ReduceScatter, NcclNvtxParamsReduceScatter,
+    NVTX3_PAYLOAD(comm ? comm->commHash : 0, recvcount * ncclTypeSize(datatype), op));
+
+  struct ncclInfo info = { ncclFuncReduceScatter, "ReduceScatterFluxSignal",
+    sendbuff, recvbuff, recvcount, datatype, op, 0, comm, stream, /* Args */
+    REDUCESCATTER_CHUNKSTEPS, REDUCESCATTER_SLICESTEPS };
+  info.fluxAgSignal = reinterpret_cast<uint64_t>(signal);
+  return ncclEnqueueCheck(&info);
+}
+
 NCCL_API(ncclResult_t, ncclScatter, const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, int root, ncclComm* comm, cudaStream_t stream);
 ncclResult_t ncclScatter(const void* sendbuff, void* recvbuff, size_t count,

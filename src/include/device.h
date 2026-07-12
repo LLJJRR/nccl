@@ -285,7 +285,8 @@ struct alignas(16) ncclDevWorkColl {
   uint32_t redOpArgIsPtr:1, regUsed:1, netRegUsed:1, oneNode:1, direct:2, isOneRPN:1;
   uint32_t profilerEnabled:1;
   uint32_t root;
-  uint8_t pad1[12];  // pad to 16-byte boundary (20 bytes above -> 32)
+  uint8_t fluxAgSignal;
+  uint8_t pad1[11];  // pad to 16-byte boundary (21 bytes above -> 32)
   void* recvbuff;
   void* sendbuff;
   uint64_t pad0;     // pad to 16-byte boundary (16 bytes above -> 32)

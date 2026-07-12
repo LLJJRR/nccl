@@ -61,7 +61,7 @@ namespace {
     int workNthreads;
     T *inputBuf = (T*)work->sendbuff;
     T *outputBuf = (T*)work->recvbuff;
-    uint64_t fluxAgSignal = work->redOpArg;
+    uint64_t fluxAgSignal = work->fluxAgSignal ? work->redOpArg : 0;
     int fluxAgExpectedCompletions = work->channelHi - work->channelLo + 1;
     fluxAgSignalLaunch(fluxAgSignal, tid);
 
