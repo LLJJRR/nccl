@@ -533,8 +533,8 @@ typedef struct ncclFluxAgSignal {
   int* barrier;      /* Device pointer: Flux AG-GEMM barrier buffer. */
   int* counters;     /* Reserved device pointer for split/chunk completion counters. */
   int* launchSignal; /* Optional device pointer signaled when the NCCL kernel starts. */
-  unsigned long long* readyCycles; /* Optional device pointer: %globaltimer when each barrier is set. */
   int split;         /* First implementation supports split == 1. */
+  unsigned long long* readyCycles; /* Optional device pointer: %globaltimer when each barrier is set. */
 } ncclFluxAgSignal_t;
 
 /*

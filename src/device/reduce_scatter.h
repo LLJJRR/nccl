@@ -14,8 +14,8 @@ namespace {
     int* barrier;
     int* counters;
     int* launchSignal;
-    unsigned long long* readyCycles;
     int split;
+    unsigned long long* readyCycles;
   };
 
   __device__ __forceinline__ void fluxRsStoreRelease(int* ptr, int value) {
