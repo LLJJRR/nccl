@@ -14,6 +14,7 @@ namespace {
     int* barrier;
     int* counters;
     int* launchSignal;
+    unsigned long long* readyCycles;
     int split;
   };
 
@@ -24,6 +25,12 @@ namespace {
     __threadfence_system();
     *(volatile int*)ptr = value;
 #endif
+  }
+
+  __device__ __forceinline__ unsigned long long fluxAgGlobalTimer() {
+    unsigned long long value;
+    asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(value));
+    return value;
   }
 
   __device__ __forceinline__ void fluxAgSignalLaunch(uint64_t signalPtr, int tid) {
@@ -43,6 +50,9 @@ namespace {
       fence_acq_rel_sys();
       int old = atomicAdd(signal->counters + rankDest, 1);
       if (old + 1 != expectedCompletions) return;
+    }
+    if (signal->readyCycles != nullptr) {
+      signal->readyCycles[rankDest] = fluxAgGlobalTimer();
     }
     fluxAgStoreRelease(signal->barrier + rankDest, 1);
   }

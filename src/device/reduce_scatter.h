@@ -14,6 +14,7 @@ namespace {
     int* barrier;
     int* counters;
     int* launchSignal;
+    unsigned long long* readyCycles;
     int split;
   };
 
