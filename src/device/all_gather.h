@@ -148,6 +148,8 @@ namespace {
     if (isNetOffload) {
       barrier_sync(14, nthreads);
       fluxAgSignalRankReady(fluxAgSignal, tid, ringRanks[0], fluxAgExpectedCompletions);
+    } else {
+      __syncthreads();
     }
     if (fluxAgSignal != 0 && tid == 0) {
       ncclFluxAgSignalDev* signal = reinterpret_cast<ncclFluxAgSignalDev*>(fluxAgSignal);
