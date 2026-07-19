@@ -15,6 +15,7 @@ namespace {
     int* counters;
     int* launchSignal;
     int split;
+    int preReadyRankToken;
     unsigned long long* readyCycles;
   };
 

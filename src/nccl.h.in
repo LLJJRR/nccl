@@ -534,6 +534,7 @@ typedef struct ncclFluxAgSignal {
   int* counters;     /* Reserved device pointer for split/chunk completion counters. */
   int* launchSignal; /* Optional device pointer signaled when the NCCL kernel starts. */
   int split;         /* First implementation supports split == 1. */
+  int preReadyRankToken; /* Encoded rank copied/signaled before NCCL, or 0 when disabled. */
   unsigned long long* readyCycles; /* Optional device pointer: %globaltimer when each barrier is set. */
   unsigned long long* startCycles; /* Optional device pointer: signal kernel start %globaltimer. */
   unsigned long long* endCycles; /* Optional device pointer: signal kernel end %globaltimer. */

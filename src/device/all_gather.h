@@ -15,6 +15,7 @@ namespace {
     int* counters;
     int* launchSignal;
     int split;
+    int preReadyRankToken;
     unsigned long long* readyCycles;
     unsigned long long* startCycles;
     unsigned long long* endCycles;
@@ -35,12 +36,22 @@ namespace {
     return value;
   }
 
+  __device__ __forceinline__ int fluxAgPreReadyRank(ncclFluxAgSignalDev* signal) {
+    constexpr int magic = 0x46580000;
+    int token = signal->preReadyRankToken;
+    return (token & 0xffff0000) == magic ? token & 0xffff : -1;
+  }
+
   __device__ __forceinline__ void fluxAgSignalLaunch(uint64_t signalPtr, int tid) {
     if (signalPtr == 0 || tid != 0) return;
     ncclFluxAgSignalDev* signal = reinterpret_cast<ncclFluxAgSignalDev*>(signalPtr);
     if (signal->startCycles != nullptr) {
       unsigned long long now = fluxAgGlobalTimer();
       atomicCAS(signal->startCycles, 0ull, now);
+      int preReadyRank = fluxAgPreReadyRank(signal);
+      if (preReadyRank >= 0 && signal->readyCycles != nullptr) {
+        atomicCAS(signal->readyCycles + preReadyRank, 0ull, now);
+      }
     }
     if (signal->launchSignal != nullptr) fluxAgStoreRelease(signal->launchSignal, 1);
   }
@@ -49,6 +60,7 @@ namespace {
       uint64_t signalPtr, int tid, int rankDest, int expectedCompletions) {
     if (signalPtr == 0 || tid != 0) return;
     ncclFluxAgSignalDev* signal = reinterpret_cast<ncclFluxAgSignalDev*>(signalPtr);
+    if (rankDest == fluxAgPreReadyRank(signal)) return;
     int split = signal->split <= 0 ? 1 : signal->split;
     if (split != 1 || signal->barrier == nullptr) return;
     if (expectedCompletions > 1) {
