@@ -535,6 +535,8 @@ typedef struct ncclFluxAgSignal {
   int* launchSignal; /* Optional device pointer signaled when the NCCL kernel starts. */
   int split;         /* First implementation supports split == 1. */
   unsigned long long* readyCycles; /* Optional device pointer: %globaltimer when each barrier is set. */
+  unsigned long long* startCycles; /* Optional device pointer: signal kernel start %globaltimer. */
+  unsigned long long* endCycles; /* Optional device pointer: signal kernel end %globaltimer. */
 } ncclFluxAgSignal_t;
 
 /*

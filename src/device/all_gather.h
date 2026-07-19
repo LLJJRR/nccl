@@ -16,6 +16,8 @@ namespace {
     int* launchSignal;
     int split;
     unsigned long long* readyCycles;
+    unsigned long long* startCycles;
+    unsigned long long* endCycles;
   };
 
   __device__ __forceinline__ void fluxAgStoreRelease(int* ptr, int value) {
@@ -36,6 +38,10 @@ namespace {
   __device__ __forceinline__ void fluxAgSignalLaunch(uint64_t signalPtr, int tid) {
     if (signalPtr == 0 || tid != 0) return;
     ncclFluxAgSignalDev* signal = reinterpret_cast<ncclFluxAgSignalDev*>(signalPtr);
+    if (signal->startCycles != nullptr) {
+      unsigned long long now = fluxAgGlobalTimer();
+      atomicCAS(signal->startCycles, 0ull, now);
+    }
     if (signal->launchSignal != nullptr) fluxAgStoreRelease(signal->launchSignal, 1);
   }
 
@@ -142,6 +148,12 @@ namespace {
     if (isNetOffload) {
       barrier_sync(14, nthreads);
       fluxAgSignalRankReady(fluxAgSignal, tid, ringRanks[0], fluxAgExpectedCompletions);
+    }
+    if (fluxAgSignal != 0 && tid == 0) {
+      ncclFluxAgSignalDev* signal = reinterpret_cast<ncclFluxAgSignalDev*>(fluxAgSignal);
+      if (signal->endCycles != nullptr) {
+        atomicMax(signal->endCycles, fluxAgGlobalTimer());
+      }
     }
   }
 }
