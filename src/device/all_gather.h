@@ -36,10 +36,18 @@ namespace {
     return value;
   }
 
-  __device__ __forceinline__ int fluxAgPreReadyRank(ncclFluxAgSignalDev* signal) {
+  __device__ __forceinline__ int fluxAgTokenRank(ncclFluxAgSignalDev* signal) {
     constexpr int magic = 0x46580000;
     int token = signal->preReadyRankToken;
-    return (token & 0xffff0000) == magic ? token & 0xffff : -1;
+    return (token & 0xfffe0000) == magic ? token & 0xffff : -1;
+  }
+
+  __device__ __forceinline__ bool fluxAgInternalCopyEnabled(ncclFluxAgSignalDev* signal) {
+    return (signal->preReadyRankToken & 0xffff0000) == 0x46590000;
+  }
+
+  __device__ __forceinline__ int fluxAgPreReadyRank(ncclFluxAgSignalDev* signal) {
+    return fluxAgInternalCopyEnabled(signal) ? -1 : fluxAgTokenRank(signal);
   }
 
   __device__ __forceinline__ void fluxAgSignalLaunch(uint64_t signalPtr, int tid) {
@@ -91,6 +99,12 @@ namespace {
     T *outputBuf = (T*)work->recvbuff;
     uint64_t fluxAgSignal = work->fluxAgSignal ? work->redOpArg : 0;
     int fluxAgExpectedCompletions = work->channelHi - work->channelLo + 1;
+    ncclFluxAgSignalDev* signal = fluxAgSignal
+        ? reinterpret_cast<ncclFluxAgSignalDev*>(fluxAgSignal)
+        : nullptr;
+    bool internalLocalCopy = signal != nullptr && fluxAgInternalCopyEnabled(signal) &&
+        !isNetOffload && Proto::Id == NCCL_PROTO_SIMPLE &&
+        inputBuf != outputBuf + ringRanks[0] * count;
     fluxAgSignalLaunch(fluxAgSignal, tid);
 
     // If isNetOffload == true, we only use 1 warp to drive Ring algo/network communication
@@ -118,12 +132,21 @@ namespace {
         rankDest = ringRanks[0];
         offset = dataOffset + rankDest * count;
 
-        if ((inputBuf + dataOffset == outputBuf + offset) || isNetOffload) { // In place or onePPN
+        bool finalLocalChunk = elemOffset + chunkCount >= partCount;
+        if ((inputBuf + dataOffset == outputBuf + offset) || isNetOffload) {
+          prims.directSend(dataOffset, offset, nelem);
+        } else if (internalLocalCopy) {
+          prims.copyLocal(dataOffset, offset, nelem);
+          if (finalLocalChunk) {
+            fluxAgSignalRankReady(
+                fluxAgSignal, tid, rankDest, fluxAgExpectedCompletions);
+          }
           prims.directSend(dataOffset, offset, nelem);
         } else {
           prims.directCopySend(dataOffset, offset, nelem);
         }
-        if (!isNetOffload && elemOffset + chunkCount >= partCount) {
+        if (!isNetOffload && finalLocalChunk &&
+            (!internalLocalCopy || rankDest != fluxAgTokenRank(signal))) {
           fluxAgSignalRankReady(fluxAgSignal, tid, rankDest, fluxAgExpectedCompletions);
         }
 
@@ -151,7 +174,8 @@ namespace {
       inputBuf = inputBuf + partOffset;
       outputBuf = outputBuf + partOffset + ringRanks[0] * count;
       reduceCopy<COLL_UNROLL, RedOp, T, 0, 1, 1, 0, 1, 1, /*PreOpSrcs=*/0>
-        (tid - workNthreads, nthreads - workNthreads, work->redOpArg, false, 1, (void**)&inputBuf, 1, (void**)&outputBuf, partCount);
+        (tid - workNthreads, nthreads - workNthreads, work->redOpArg, false, 1,
+         (void**)&inputBuf, 1, (void**)&outputBuf, partCount);
     }
     // we have to wait for all warps before we can proceed to the next work;
     // otherwise, we can have contention if next work will use the outputBuf

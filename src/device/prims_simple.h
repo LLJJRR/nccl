@@ -869,6 +869,22 @@ private:
     genericOp<0, 1, 0, 1, Input, Output>(inpIx, outIx, eltN, postOp);
   }
 
+  __device__ __forceinline__ void copyLocal(intptr_t inpIx, intptr_t outIx, int eltN) {
+    if (tid < nworkers) {
+      reduceCopy<COLL_UNROLL, RedOp, T, 0, 1, 1, 0, 1, 1, /*PreOpSrcs=*/0>(
+          tid,
+          nworkers,
+          ncclShmem.groups[group].redOpArgs,
+          false,
+          1,
+          [=] __device__(int) { return (T*)ncclShmem.groups[group].userInput + inpIx; },
+          1,
+          [=] __device__(int) { return (T*)ncclShmem.groups[group].userOutput + outIx; },
+          eltN);
+    }
+    barrier();
+  }
+
   __device__ __forceinline__ void recvSend(int eltN, bool postOp=false) {
     genericOp<0, 0, 1, 1, -1, -1>(-1, -1, eltN, postOp);
   }
