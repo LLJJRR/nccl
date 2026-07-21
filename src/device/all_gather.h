@@ -39,17 +39,11 @@ namespace {
   __device__ __forceinline__ int fluxAgTokenRank(ncclFluxAgSignalDev* signal) {
     constexpr int magic = 0x46580000;
     int token = signal->preReadyRankToken;
-    return (token & 0xfffc0000) == magic ? token & 0xffff : -1;
+    return (token & 0xfffe0000) == magic ? token & 0xffff : -1;
   }
 
   __device__ __forceinline__ bool fluxAgInternalCopyEnabled(ncclFluxAgSignalDev* signal) {
-    int mode = signal->preReadyRankToken & 0xffff0000;
-    return mode == 0x46590000 || mode == 0x465a0000;
-  }
-
-  __device__ __forceinline__ bool fluxAgInternalCopyOptEnabled(
-      ncclFluxAgSignalDev* signal) {
-    return (signal->preReadyRankToken & 0xffff0000) == 0x465a0000;
+    return (signal->preReadyRankToken & 0xffff0000) == 0x46590000;
   }
 
   __device__ __forceinline__ int fluxAgPreReadyRank(ncclFluxAgSignalDev* signal) {
@@ -111,7 +105,6 @@ namespace {
     bool internalLocalCopy = signal != nullptr && fluxAgInternalCopyEnabled(signal) &&
         !isNetOffload && Proto::Id == NCCL_PROTO_SIMPLE &&
         inputBuf != outputBuf + ringRanks[0] * count;
-    bool optimizedLocalCopy = internalLocalCopy && fluxAgInternalCopyOptEnabled(signal);
     fluxAgSignalLaunch(fluxAgSignal, tid);
 
     // If isNetOffload == true, we only use 1 warp to drive Ring algo/network communication
@@ -143,11 +136,7 @@ namespace {
         if ((inputBuf + dataOffset == outputBuf + offset) || isNetOffload) {
           prims.directSend(dataOffset, offset, nelem);
         } else if (internalLocalCopy) {
-          if (optimizedLocalCopy) {
-            prims.copyLocalOptimized(dataOffset, offset, nelem);
-          } else {
-            prims.copyLocal(dataOffset, offset, nelem);
-          }
+          prims.copyLocal(dataOffset, offset, nelem);
           if (finalLocalChunk) {
             fluxAgSignalRankReady(
                 fluxAgSignal, tid, rankDest, fluxAgExpectedCompletions);
