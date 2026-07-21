@@ -885,6 +885,21 @@ private:
     barrier();
   }
 
+  __device__ __forceinline__ void copyLocalOptimized(
+      intptr_t inpIx, intptr_t outIx, int eltN) {
+    reduceCopy<COLL_UNROLL, RedOp, T, 0, 1, 1, 0, 1, 1, /*PreOpSrcs=*/0>(
+        tid,
+        nthreads,
+        ncclShmem.groups[group].redOpArgs,
+        false,
+        1,
+        [=] __device__(int) { return (T*)ncclShmem.groups[group].userInput + inpIx; },
+        1,
+        [=] __device__(int) { return (T*)ncclShmem.groups[group].userOutput + outIx; },
+        eltN);
+    barrier();
+  }
+
   __device__ __forceinline__ void recvSend(int eltN, bool postOp=false) {
     genericOp<0, 0, 1, 1, -1, -1>(-1, -1, eltN, postOp);
   }
