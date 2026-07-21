@@ -152,11 +152,7 @@ namespace {
             fluxAgSignalRankReady(
                 fluxAgSignal, tid, rankDest, fluxAgExpectedCompletions);
           }
-          if (optimizedLocalCopy) {
-            prims.directSendFromOutput(offset, nelem);
-          } else {
-            prims.directSend(dataOffset, offset, nelem);
-          }
+          prims.directSend(dataOffset, offset, nelem);
         } else {
           prims.directCopySend(dataOffset, offset, nelem);
         }
