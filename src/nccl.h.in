@@ -538,6 +538,9 @@ typedef struct ncclFluxAgSignal {
   unsigned long long* readyCycles; /* Optional device pointer: %globaltimer when each barrier is set. */
   unsigned long long* startCycles; /* Optional device pointer: signal kernel start %globaltimer. */
   unsigned long long* endCycles; /* Optional device pointer: signal kernel end %globaltimer. */
+  int* producerReady; /* Optional device pointer: per-rank input-ready epochs for Flux RS. */
+  int* launchCounter; /* Optional device pointer: resident Flux RS Ring channel count. */
+  int producerEpoch; /* Expected producer/launch epoch for Flux RS. */
 } ncclFluxAgSignal_t;
 
 /*

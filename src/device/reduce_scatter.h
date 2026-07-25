@@ -17,6 +17,11 @@ namespace {
     int split;
     int preReadyRankToken;
     unsigned long long* readyCycles;
+    unsigned long long* startCycles;
+    unsigned long long* endCycles;
+    int* producerReady;
+    int* launchCounter;
+    int producerEpoch;
   };
 
   __device__ __forceinline__ void fluxRsStoreRelease(int* ptr, int value) {
@@ -28,10 +33,45 @@ namespace {
 #endif
   }
 
-  __device__ __forceinline__ void fluxRsSignalLaunch(uint64_t signalPtr, int tid) {
+  __device__ __forceinline__ int fluxRsLoadAcquire(const int* ptr) {
+    int value;
+#if __CUDA_ARCH__ >= 700
+    asm volatile("ld.acquire.sys.global.u32 %0, [%1];" : "=r"(value) : "l"(ptr) : "memory");
+#else
+    value = *(const volatile int*)ptr;
+#endif
+    return value;
+  }
+
+  __device__ __forceinline__ void fluxRsSignalLaunch(
+      uint64_t signalPtr, int tid, int expectedChannels) {
     if (signalPtr == 0 || tid != 0) return;
     ncclFluxRsSignalDev* signal = reinterpret_cast<ncclFluxRsSignalDev*>(signalPtr);
-    if (signal->launchSignal != nullptr) fluxRsStoreRelease(signal->launchSignal, 1);
+    if (signal->launchSignal == nullptr) return;
+    if (signal->launchCounter == nullptr || signal->producerEpoch <= 0) {
+      fluxRsStoreRelease(signal->launchSignal, 1);
+      return;
+    }
+    int old = atomicAdd(signal->launchCounter, 1);
+    if (old + 1 == expectedChannels) {
+      fluxRsStoreRelease(signal->launchSignal, signal->producerEpoch);
+    }
+  }
+
+  __device__ __forceinline__ void fluxRsWaitProducer(
+      uint64_t signalPtr, int tid, int nthreads, int rankDest) {
+    if (signalPtr == 0) return;
+    ncclFluxRsSignalDev* signal = reinterpret_cast<ncclFluxRsSignalDev*>(signalPtr);
+    if (signal->producerReady == nullptr || signal->producerEpoch <= 0) return;
+    if (tid == 0) {
+      while ((int)(fluxRsLoadAcquire(signal->producerReady + rankDest) -
+                   signal->producerEpoch) < 0) {}
+    }
+    if (nthreads == WARP_SIZE) {
+      __syncwarp();
+    } else {
+      barrier_sync(13, nthreads);
+    }
   }
 
   __device__ __forceinline__ void fluxRsSignalRankReady(
@@ -65,7 +105,7 @@ namespace {
     int rankDest;
     uint64_t fluxRsSignal = work->fluxAgSignal ? work->redOpArg : 0;
     int fluxRsExpectedCompletions = work->channelHi - work->channelLo + 1;
-    fluxRsSignalLaunch(fluxRsSignal, tid);
+    fluxRsSignalLaunch(fluxRsSignal, tid, fluxRsExpectedCompletions);
 
     // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
     // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
@@ -81,18 +121,21 @@ namespace {
       // step 0: push data to next GPU
       rankDest = ringRanks[nranks-1];
       offset = dataOffset + rankDest * count;
+      fluxRsWaitProducer(fluxRsSignal, tid, nthreads, rankDest);
       prims.send(offset, nelem);
 
       // k-2 steps: reduce and copy to next GPU
       for (int j=2; j<nranks; ++j) {
         rankDest = ringRanks[nranks-j];
         offset = dataOffset + rankDest * count;
+        fluxRsWaitProducer(fluxRsSignal, tid, nthreads, rankDest);
         prims.recvReduceSend(offset, nelem);
       }
 
       // step k-1: reduce this buffer and data, which will produce the final result
       rankDest = ringRanks[0];
       offset = dataOffset + rankDest * count;
+      fluxRsWaitProducer(fluxRsSignal, tid, nthreads, rankDest);
       prims.recvReduceCopy(offset, dataOffset, nelem, /*postOp=*/true);
       if (elemOffset + chunkCount >= channelCount) {
         fluxRsSignalRankReady(fluxRsSignal, tid, rankDest, fluxRsExpectedCompletions);
