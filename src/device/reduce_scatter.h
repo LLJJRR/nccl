@@ -59,13 +59,22 @@ namespace {
   }
 
   __device__ __forceinline__ void fluxRsWaitProducer(
-      uint64_t signalPtr, int tid, int nthreads, int rankDest) {
+      uint64_t signalPtr, int tid, int nthreads, int rankDest,
+      size_t dataOffset, uint32_t nelem, size_t count) {
     if (signalPtr == 0) return;
     ncclFluxRsSignalDev* signal = reinterpret_cast<ncclFluxRsSignalDev*>(signalPtr);
     if (signal->producerReady == nullptr || signal->producerEpoch <= 0) return;
+    int split = signal->split <= 0 ? 1 : signal->split;
+    size_t splitCount = count / split;
+    int firstSplit = splitCount == 0 ? 0 : dataOffset / splitCount;
+    int lastSplit = splitCount == 0 ? 0 : (dataOffset + nelem - 1) / splitCount;
+    if (lastSplit >= split) lastSplit = split - 1;
     if (tid == 0) {
-      while ((int)(fluxRsLoadAcquire(signal->producerReady + rankDest) -
-                   signal->producerEpoch) < 0) {}
+      for (int splitIdx = firstSplit; splitIdx <= lastSplit; ++splitIdx) {
+        while ((int)(fluxRsLoadAcquire(
+                         signal->producerReady + rankDest * split + splitIdx) -
+                     signal->producerEpoch) < 0) {}
+      }
     }
     if (nthreads == WARP_SIZE) {
       __syncwarp();
@@ -121,21 +130,21 @@ namespace {
       // step 0: push data to next GPU
       rankDest = ringRanks[nranks-1];
       offset = dataOffset + rankDest * count;
-      fluxRsWaitProducer(fluxRsSignal, tid, nthreads, rankDest);
+      fluxRsWaitProducer(fluxRsSignal, tid, nthreads, rankDest, dataOffset, nelem, count);
       prims.send(offset, nelem);
 
       // k-2 steps: reduce and copy to next GPU
       for (int j=2; j<nranks; ++j) {
         rankDest = ringRanks[nranks-j];
         offset = dataOffset + rankDest * count;
-        fluxRsWaitProducer(fluxRsSignal, tid, nthreads, rankDest);
+        fluxRsWaitProducer(fluxRsSignal, tid, nthreads, rankDest, dataOffset, nelem, count);
         prims.recvReduceSend(offset, nelem);
       }
 
       // step k-1: reduce this buffer and data, which will produce the final result
       rankDest = ringRanks[0];
       offset = dataOffset + rankDest * count;
-      fluxRsWaitProducer(fluxRsSignal, tid, nthreads, rankDest);
+      fluxRsWaitProducer(fluxRsSignal, tid, nthreads, rankDest, dataOffset, nelem, count);
       prims.recvReduceCopy(offset, dataOffset, nelem, /*postOp=*/true);
       if (elemOffset + chunkCount >= channelCount) {
         fluxRsSignalRankReady(fluxRsSignal, tid, rankDest, fluxRsExpectedCompletions);
