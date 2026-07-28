@@ -43,8 +43,7 @@ namespace {
     return value;
   }
 
-  __device__ __forceinline__ void fluxRsSignalLaunch(
-      uint64_t signalPtr, int tid, int expectedChannels) {
+  __device__ __forceinline__ void fluxRsSignalLaunch(uint64_t signalPtr, int tid) {
     if (signalPtr == 0 || tid != 0) return;
     ncclFluxRsSignalDev* signal = reinterpret_cast<ncclFluxRsSignalDev*>(signalPtr);
     if (signal->launchSignal == nullptr) return;
@@ -53,7 +52,7 @@ namespace {
       return;
     }
     int old = atomicAdd(signal->launchCounter, 1);
-    if (old + 1 == expectedChannels) {
+    if (old == 0) {
       fluxRsStoreRelease(signal->launchSignal, signal->producerEpoch);
     }
   }
@@ -114,7 +113,7 @@ namespace {
     int rankDest;
     uint64_t fluxRsSignal = work->fluxAgSignal ? work->redOpArg : 0;
     int fluxRsExpectedCompletions = work->channelHi - work->channelLo + 1;
-    fluxRsSignalLaunch(fluxRsSignal, tid, fluxRsExpectedCompletions);
+    fluxRsSignalLaunch(fluxRsSignal, tid);
 
     // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
     // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
