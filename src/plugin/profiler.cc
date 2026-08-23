@@ -12,6 +12,7 @@
 #include "utils.h"
 #include "proxy.h"
 #include "profiler.h"
+#include "telemetry.h"
 #include "transport.h"
 #include "plugin.h"
 #include "compiler.h"
@@ -716,7 +717,8 @@ exit:
 }
 
 bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op) {
-  bool enabled = ncclProfilerPluginLoaded() && (op->eActivationMask & ncclProfileKernelCh);
+  bool enabled = (ncclProfilerPluginLoaded() && (op->eActivationMask & ncclProfileKernelCh)) ||
+    ncclTelemetryLevel() >= NCCL_TELEM_EXECUTION;
   if (enabled && !comm->profiler.initialized) (void)proxyProfilerConnect(comm, op);
   return enabled;
 }
@@ -880,4 +882,3 @@ ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, void* ceBatchHa
   }
   return ncclSuccess;
 }
-
