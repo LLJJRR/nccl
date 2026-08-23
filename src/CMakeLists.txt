@@ -6,6 +6,7 @@ set(LIBSRCFILES
     collectives.cc
     debug.cc
     enqueue.cc
+    telemetry.cc
     group.cc
     init.cc
     proxy.cc
