@@ -15,7 +15,7 @@ for path in sys.argv[1:]:
                 host_times.append((int(timer), int(host)))
             m = trans.search(line)
             if m: transports[m.group(1)] += 1
-rows = [(k, v['END'][0]-v['START'][0], v['END'][1]-v['START'][1]) for k,v in events.items()
+rows = [(k, v['END'][0]-v['START'][0], v['END'][1]-v['START'][1], v['START'][1], v['END'][1]) for k,v in events.items()
         if 'START' in v and 'END' in v and v['END'][0] >= v['START'][0]]
 print('NCCL Telemetry Report')
 print(f'matched_work_events={len(rows)}')
@@ -24,12 +24,16 @@ if host_times:
 if transports:
     print('transports=' + ', '.join(f'{k}:{v}' for k,v in sorted(transports.items())))
 by_rank = defaultdict(list)
-for (rank, ch, counter), duration, host_duration in rows: by_rank[rank].append((ch, counter, duration, host_duration))
+for (rank, ch, counter), duration, host_duration, start_ns, end_ns in rows: by_rank[rank].append((ch, counter, duration, host_duration, start_ns, end_ns))
 for rank, vals in sorted(by_rank.items()):
     ds = [x[2] for x in vals]; mean = statistics.mean(ds)
     imbalance = (max(ds)-min(ds))/mean if mean else 0
     print(f'rank={rank} channels={len(vals)} min_ticks={min(ds)} max_ticks={max(ds)} mean_ticks={mean:.1f} imbalance={imbalance:.3f}')
-    for ch, counter, duration, host_duration in sorted(vals, key=lambda x:x[2], reverse=True)[:5]:
+    for ch, counter, duration, host_duration, _, _ in sorted(vals, key=lambda x:x[2], reverse=True)[:5]:
         print(f'  slow_channel={ch} counter={counter} duration_ticks={duration} host_duration_ns={host_duration}')
+    starts = [x[4] for x in vals]
+    if max(starts) > min(starts): print(f'diagnostic=late_arrival:rank={rank}:spread_ns={max(starts)-min(starts)}')
+    ends = [x[5] for x in vals]
+    if max(ends) > min(ends): print(f'diagnostic=completion_skew:rank={rank}:spread_ns={max(ends)-min(ends)}')
     if imbalance > .10: print(f'diagnostic=channel_imbalance:rank={rank}:ratio={imbalance:.3f}')
 if not rows: print('diagnostic=no_matched_gpu_work_pairs')
