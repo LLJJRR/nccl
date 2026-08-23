@@ -1827,7 +1827,10 @@ void ncclTelemetryCaptureCompletedWork(struct ncclComm* comm) {
       for (uint64_t wc = first; wc <= counter; wc++) {
         int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
         auto start = comm->profiler.workStarted[c].data[slot];
-        auto end = comm->profiler.workCompleted[c].data[slot];
+      auto end = comm->profiler.workCompleted[c].data[slot];
+      if (end.counter != 0) {
+        ncclTelemetryRecordWorkSnapshot(comm->rank, c, counter, end.counter);
+      }
         if (start.counter == wc)
           ncclTelemetryRecordWork(comm->rank, c, wc, start.timestamp, false);
         if (end.counter == wc)

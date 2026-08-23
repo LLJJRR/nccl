@@ -8,6 +8,7 @@
 #include "proxy.h"
 #include "profiler.h"
 #include "device.h"
+#include "telemetry.h"
 
 static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState, void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
   connection->proxyAppendPtr = &connection->proxyAppend;
@@ -39,6 +40,8 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
         continue; // allow events on every channel to start
       }
       if (sub->transmitted < sub->nsteps && sub->base <= workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter) {
+        ncclTelemetryRecordWorkSnapshot(proxyState->comm->rank, sub->channelId, sub->base,
+          workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter);
         ncclProfilerStopKernelChEvent(args, s, workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
         sub->transmitted = sub->nsteps;
         args->done++;

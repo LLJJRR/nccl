@@ -102,6 +102,11 @@ void dump() {
               e.eventType == NCCL_TELEM_WORK_START ? "START" : "END", e.rank, e.channel,
               (unsigned long long)e.collectiveId, (unsigned long long)e.value);
       break;
+    case NCCL_TELEM_WORK_SNAPSHOT:
+      fprintf(text, "[%llu ns] WORK_SNAPSHOT rank=%u ch=%u counter=%llu value=%llu\n",
+              (unsigned long long)e.timestampNs, e.rank, e.channel,
+              (unsigned long long)e.collectiveId, (unsigned long long)e.value);
+      break;
     default:
       fprintf(text, "[%llu ns] EVENT type=%u\n", (unsigned long long)e.timestampNs, e.eventType);
       break;
@@ -184,6 +189,10 @@ void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next) {
 void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t timestamp, bool end) {
   record(end ? NCCL_TELEM_WORK_END : NCCL_TELEM_WORK_START, counter, 0, rank, channel,
          0, 0, 0, 0, 0, timestamp);
+}
+
+void ncclTelemetryRecordWorkSnapshot(int rank, int channel, uint64_t counter, uint64_t value) {
+  record(NCCL_TELEM_WORK_SNAPSHOT, counter, 0, rank, channel, 0, 0, 0, 0, 0, value);
 }
 
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport) {
