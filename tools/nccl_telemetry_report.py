@@ -31,9 +31,13 @@ for rank, vals in sorted(by_rank.items()):
     print(f'rank={rank} channels={len(vals)} min_ticks={min(ds)} max_ticks={max(ds)} mean_ticks={mean:.1f} imbalance={imbalance:.3f}')
     for ch, counter, duration, host_duration, _, _ in sorted(vals, key=lambda x:x[2], reverse=True)[:5]:
         print(f'  slow_channel={ch} counter={counter} duration_ticks={duration} host_duration_ns={host_duration}')
-    starts = [x[4] for x in vals]
-    if max(starts) > min(starts): print(f'diagnostic=late_arrival:rank={rank}:spread_ns={max(starts)-min(starts)}')
-    ends = [x[5] for x in vals]
-    if max(ends) > min(ends): print(f'diagnostic=completion_skew:rank={rank}:spread_ns={max(ends)-min(ends)}')
+    for counter in sorted(set(x[1] for x in vals)):
+        batch = [x for x in vals if x[1] == counter]
+        starts = [x[4] for x in batch]
+        ends = [x[5] for x in batch]
+        if len(batch) > 1 and max(starts) > min(starts):
+            print(f'diagnostic=late_arrival:rank={rank}:counter={counter}:spread_ns={max(starts)-min(starts)}')
+        if len(batch) > 1 and max(ends) > min(ends):
+            print(f'diagnostic=completion_skew:rank={rank}:counter={counter}:spread_ns={max(ends)-min(ends)}')
     if imbalance > .10: print(f'diagnostic=channel_imbalance:rank={rank}:ratio={imbalance:.3f}')
 if not rows: print('diagnostic=no_matched_gpu_work_pairs')
