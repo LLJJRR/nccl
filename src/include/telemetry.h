@@ -36,6 +36,7 @@ struct ncclTelemetryEvent {
 void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collective,
                                    size_t payloadBytes, size_t trafficBytes);
 uint64_t ncclTelemetryNextCollectiveId();
+void ncclTelemetryFlush();
 void ncclTelemetryRecordChannel(uint64_t collectiveId, uint64_t planId, int rank,
                                 int channel, int collective, int algorithm, int protocol,
                                 size_t payloadBytes, size_t trafficBytes);

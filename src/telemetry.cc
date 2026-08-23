@@ -52,6 +52,9 @@ void dump() {
   fwrite(&version, sizeof(version), 1, f);
   fwrite(&eventSize, sizeof(eventSize), 1, f);
   fwrite(&dropped, sizeof(dropped), 1, f);
+  if (text != nullptr) fprintf(text, "HEADER version=%u event_size=%u events=%llu dropped=%llu\n",
+                               version, eventSize, (unsigned long long)(end - begin),
+                               (unsigned long long)dropped);
   for (uint64_t i = begin; i < end; ++i) {
     const ncclTelemetryEvent& e = buffer.events[i % kCapacity];
     fwrite(&e, sizeof(ncclTelemetryEvent), 1, f);
@@ -97,6 +100,10 @@ void dump() {
   }
   fclose(f);
   if (text != nullptr) fclose(text);
+}
+
+void ncclTelemetryFlush() {
+  if (ncclParamTelemetryEnable()) dump();
 }
 
 void ensureInitialized() {
