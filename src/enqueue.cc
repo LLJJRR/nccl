@@ -1823,13 +1823,18 @@ namespace {
     for (int c = 0; c < comm->nChannels; c++) {
       uint64_t counter = comm->profiler.workCounter[c];
       if (counter == 0) continue;
-      int slot = counter % MAX_PROFILER_EVENTS_PER_CHANNEL;
-      auto start = comm->profiler.workStarted[c].data[slot];
-      auto end = comm->profiler.workCompleted[c].data[slot];
-      if (start.counter == counter)
-        ncclTelemetryRecordWork(comm->rank, c, counter, start.timestamp, false);
-      if (end.counter == counter)
-        ncclTelemetryRecordWork(comm->rank, c, counter, end.timestamp, true);
+      uint64_t first = comm->profiler.telemetryCaptured[c] + 1;
+      if (counter - first >= MAX_PROFILER_EVENTS_PER_CHANNEL) first = counter - MAX_PROFILER_EVENTS_PER_CHANNEL + 1;
+      for (uint64_t wc = first; wc <= counter; wc++) {
+        int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
+        auto start = comm->profiler.workStarted[c].data[slot];
+        auto end = comm->profiler.workCompleted[c].data[slot];
+        if (start.counter == wc)
+          ncclTelemetryRecordWork(comm->rank, c, wc, start.timestamp, false);
+        if (end.counter == wc)
+          ncclTelemetryRecordWork(comm->rank, c, wc, end.timestamp, true);
+      }
+      comm->profiler.telemetryCaptured[c] = counter;
     }
   }
   struct KernelFinishCallback {

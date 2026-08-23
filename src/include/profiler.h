@@ -25,6 +25,7 @@ struct ncclProfilerProxy {
   struct ncclDevProfiler* workStarted/*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted/*[MAXCHANNELS]*/;
   uint64_t workCounter[MAXCHANNELS]; // host work counter
+  uint64_t telemetryCaptured[MAXCHANNELS]; // last work counter exported to telemetry
   struct ncclProxyConnector sendProxyConn[MAXCHANNELS];
   struct ncclProxyConnector recvProxyConn[MAXCHANNELS];
 };
