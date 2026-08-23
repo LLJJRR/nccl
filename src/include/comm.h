@@ -189,6 +189,7 @@ struct ncclCollnetHandleList {
 
 struct ncclTaskColl {
   struct ncclTaskColl* next;
+  uint64_t telemetryId;
   ncclFunc_t func;
   void const* sendbuff;
   void* recvbuff;

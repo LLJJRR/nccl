@@ -20,6 +20,7 @@
 #include "scheduler.h"
 #include "compiler.h"
 #include "rma/rma.h"
+#include "telemetry.h"
 
 #include <cstring> // std::memcpy
 #include <cinttypes> // PRIx64
@@ -104,6 +105,8 @@ static inline int ncclFuncTrafficPerByte(ncclFunc_t func, int nRanks) {
 /*****************************************************************************/
 
 ncclResult_t ncclAddProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclProxyOp* op) {
+  ncclTelemetryRecordProxy(uint64_t(reinterpret_cast<uintptr_t>(plan)), comm->rank,
+                           op->channelId, op->pattern, op->channelSize, op->opCount);
   bool needed = true;
   NCCLCHECK(ncclProxySaveOp(comm, op, &needed));
   if (needed) {
@@ -609,6 +612,8 @@ static ncclResult_t scheduleCollTasksToPlan(
     struct ncclWorkList* workNode = ncclIntruQueueHead(&planner->collWorkQueue);
     struct ncclDevWorkColl* devWork = (struct ncclDevWorkColl*)(workNode+1);
     size_t elementSize = ncclTypeSize(task->datatype);
+    size_t telemetryChannelBytes = 0;
+    int telemetryTrafficPerByte = ncclFuncTrafficPerByte(task->func, comm->nRanks);
 
     int kind = 2*task->isCollnet + task->isNvls;
     if (kind != kindPrev) {
@@ -634,6 +639,7 @@ static ncclResult_t scheduleCollTasksToPlan(
       devWork->collnet.count = task->count;
       devWork->collnet.chunkCount = chunkSize/ncclTypeSize(task->datatype);
       devWork->direct = directFlags;
+      telemetryChannelBytes = divUp(task->count * elementSize, (size_t)nChannels);
 
       uint64_t proxyOpId = uint64_t(plan->collOpCount++)<<1 | 0;
       for (int c=devWork->channelLo; c <= (int)devWork->channelHi; c++) {
@@ -721,6 +727,7 @@ static ncclResult_t scheduleCollTasksToPlan(
         devWork->cbd.chunkGrainsMid = chunkSize/grainSize;
       }
       devWork->direct = directFlags;
+      telemetryChannelBytes = countMid * elementSize;
 
       // Update the current channel and vacant traffic budget.
       if (countHi != 0) {
@@ -782,6 +789,21 @@ static ncclResult_t scheduleCollTasksToPlan(
     }
 
     plan->channelMask |= (2ull<<devWork->channelHi) - (1ull<<devWork->channelLo);
+    for (int c = devWork->channelLo; c <= (int)devWork->channelHi; c++) {
+      size_t channelBytes = telemetryChannelBytes;
+      if (!task->isCollnet) {
+        size_t channelCount = c == (int)devWork->channelLo ? devWork->cbd.countLo :
+                              (c == (int)devWork->channelHi ? devWork->cbd.countHi : devWork->cbd.countMid);
+        channelBytes = channelCount * elementSize;
+      }
+      ncclTelemetryRecordChannel(
+        task->telemetryId,
+        uint64_t(reinterpret_cast<uintptr_t>(plan)), comm->rank, c, task->func,
+        task->algorithm, task->protocol, channelBytes,
+        channelBytes * (task->isCollnet ? 1 : telemetryTrafficPerByte));
+      ncclTelemetryRecordRingEdge(comm->rank, c, comm->channels[c].ring.prev,
+                                  comm->channels[c].ring.next);
+    }
     plan->threadPerBlock = std::max(plan->threadPerBlock, task->nWarps*WARP_SIZE);
     if (!plan->kernelSpecialized) {
       plan->kernelFn = ncclDevKernelForFunc[task->devFuncId];
@@ -1683,6 +1705,8 @@ NCCL_PARAM(MemSyncDomain, "MEM_SYNC_DOMAIN", cudaLaunchMemSyncDomainRemote);
 ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   ncclResult_t ret = ncclSuccess;
   struct ncclKernelPlanner* planner = &comm->planner;
+  ncclTelemetryRecordPlan(uint64_t(reinterpret_cast<uintptr_t>(plan)), comm->rank,
+                          plan->channelMask, plan->collOpCount);
   int nChannels = countOneBits(plan->channelMask);
   void* sym = plan->kernelFn;
   dim3 grid = {(unsigned)nChannels, 1, 1};
@@ -2629,6 +2653,9 @@ static ncclResult_t collTaskAppend(
     elementSize = 1;
   }
   t->trafficBytes = t->count*elementSize*ncclFuncTrafficPerByte(t->func, comm->nRanks);
+  t->telemetryId = ncclTelemetryNextCollectiveId();
+  ncclTelemetryRecordCollective(t->telemetryId, comm->rank, t->func,
+                                t->count * elementSize, t->trafficBytes);
   t->opHost = info->op;
   t->opDev = opDev; // C++ struct assignment
   t->chunkSteps = info->chunkSteps;

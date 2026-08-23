@@ -18,7 +18,7 @@ TRANSPORT_CC := $(filter-out transport/net_socket_stub.cc transport/net_ib_stub.
 endif
 
 LIBSRCFILES := \
-	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc group.cc \
+	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc telemetry.cc group.cc \
 	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
 	$(wildcard graph/*.cc) \
 	$(wildcard misc/*.cc) \

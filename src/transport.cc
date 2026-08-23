@@ -11,6 +11,7 @@
 #define ENABLE_TIMER 0
 #include "timer.h"
 #include "transport.h"
+#include "telemetry.h"
 
 struct ncclTransport* ncclTransports[NTRANSPORTS+1] = {
   &p2pTransport,
@@ -35,6 +36,7 @@ static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph*
       connector->transportComm = transportComm;
       NCCLCHECK(transportComm->setup(comm, graph, myInfo, peerInfo, connect, connector, channelId, connIndex));
       if (transportType) *transportType = t;
+      ncclTelemetryRecordTransport(comm->rank, channelId, peer, connIndex, t);
       return ncclSuccess;
     }
   }
