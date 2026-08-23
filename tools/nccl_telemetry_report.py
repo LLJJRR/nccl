@@ -19,6 +19,13 @@ rows = [(k, v['END'][0]-v['START'][0], v['END'][1]-v['START'][1], v['START'][1],
         if 'START' in v and 'END' in v and v['END'][0] >= v['START'][0]]
 print('NCCL Telemetry Report')
 print(f'matched_work_events={len(rows)}')
+ring = []
+with open(sys.argv[1], errors='replace') as f:
+    for line in f:
+        if ' RING ' in line: ring.append(line.strip())
+if ring:
+    print(f'topology_ring_edges={len(ring)}')
+    for line in ring[:8]: print('  ' + line)
 if host_times:
     print(f'gpu_timer_range_ticks={max(x[0] for x in host_times)-min(x[0] for x in host_times)} host_range_ns={max(x[1] for x in host_times)-min(x[1] for x in host_times)}')
 if transports:
