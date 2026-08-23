@@ -1817,8 +1817,7 @@ ncclResult_t ncclLaunchKernelAfter_NoCuda(struct ncclComm* comm, struct ncclKern
   return ncclSuccess;
 }
 
-namespace {
-  static void ncclTelemetryCaptureCompletedWork(struct ncclComm* comm) {
+void ncclTelemetryCaptureCompletedWork(struct ncclComm* comm) {
     if (ncclTelemetryLevel() < NCCL_TELEM_EXECUTION || comm->profiler.workStarted == nullptr) return;
     for (int c = 0; c < comm->nChannels; c++) {
       uint64_t counter = comm->profiler.workCounter[c];
@@ -1836,7 +1835,9 @@ namespace {
       }
       comm->profiler.telemetryCaptured[c] = counter;
     }
-  }
+}
+
+namespace {
   struct KernelFinishCallback {
     struct ncclCommEventCallback base;
     uint32_t workFifoConsumed;

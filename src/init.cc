@@ -20,6 +20,7 @@
 #include "gin.h"
 #endif
 #include "enqueue.h"
+#include "telemetry.h"
 #include "graph.h"
 #include "graph/topo.h"
 #include "argcheck.h"
@@ -2738,6 +2739,11 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   comm->destroyFlag = 1;
   /* init thread must be joined before we destroy the comm. */
   NCCLCHECK(ncclCommEnsureReady(comm));
+  if (ncclTelemetryLevel() >= NCCL_TELEM_EXECUTION) {
+    CUDACHECK(cudaDeviceSynchronize());
+    ncclTelemetryCaptureCompletedWork(comm);
+    ncclTelemetryFlush();
+  }
   NEW_NOTHROW_GOTO(job, ncclCommFinalizeAsyncJob, res, fail);
   job->comm = comm;
   NCCLCHECKGOTO(ncclAsyncLaunch((struct ncclAsyncJob*)job, commReclaim, nullptr, ncclCommFinalizeAsyncJobFree, comm), res, fail);
@@ -3314,4 +3320,3 @@ ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank) {
   *rank = comm->rank;
   return ncclSuccess;
 }
-
