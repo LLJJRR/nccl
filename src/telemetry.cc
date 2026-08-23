@@ -111,14 +111,6 @@ void dump() {
   if (text != nullptr) fclose(text);
 }
 
-void ncclTelemetryFlush() {
-  if (ncclParamTelemetryEnable()) dump();
-}
-
-int ncclTelemetryLevel() {
-  return ncclParamTelemetryEnable() ? (int)ncclParamTelemetryLevel() : -1;
-}
-
 void ensureInitialized() {
   bool expected = false;
   if (initialized.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -148,6 +140,14 @@ void record(uint16_t type, uint64_t collectiveId, uint64_t planId, int rank, int
   e.trafficBytes = trafficBytes;
   e.value = value;
 }
+}
+
+void ncclTelemetryFlush() {
+  if (ncclParamTelemetryEnable()) dump();
+}
+
+int ncclTelemetryLevel() {
+  return ncclParamTelemetryEnable() ? (int)ncclParamTelemetryLevel() : -1;
 }
 
 uint64_t ncclTelemetryNextCollectiveId() {
