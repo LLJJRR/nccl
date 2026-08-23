@@ -17,7 +17,7 @@ for collective in all_reduce all_gather reduce_scatter; do
         line=$(grep -E '^[[:space:]]*[0-9]+[[:space:]]' "$log" | tail -1)
         set -- $line
         trace=$(ls -t /tmp/nccl_telemetry.*.txt 2>/dev/null | head -1 || true)
-        echo "$collective,$transport,$size,$mode,$6,$7,$8,$12,$trace" >> "$OUT"
+        echo "$collective,$transport,$size,$mode,$6,$7,$8,$9,$trace" >> "$OUT"
         rm -f "$log"
       done
     done
