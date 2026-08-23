@@ -17,6 +17,12 @@ enum ncclTelemetryEventType : uint16_t {
   NCCL_TELEM_RING_EDGE = 6
 };
 
+enum ncclTelemetryLevel : uint8_t {
+  NCCL_TELEM_BASIC = 0,
+  NCCL_TELEM_EXECUTION = 1,
+  NCCL_TELEM_DIAGNOSTIC = 2
+};
+
 struct ncclTelemetryEvent {
   uint64_t timestampNs;
   uint64_t collectiveId;
@@ -37,6 +43,7 @@ void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collecti
                                    size_t payloadBytes, size_t trafficBytes);
 uint64_t ncclTelemetryNextCollectiveId();
 void ncclTelemetryFlush();
+int ncclTelemetryLevel();
 void ncclTelemetryRecordChannel(uint64_t collectiveId, uint64_t planId, int rank,
                                 int channel, int collective, int algorithm, int protocol,
                                 size_t payloadBytes, size_t trafficBytes);

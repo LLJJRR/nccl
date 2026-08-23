@@ -13,7 +13,9 @@
 #include <ctime>
 #include <unistd.h>
 
-NCCL_PARAM(TelemetryEnable, "TELEMETRY_ENABLE", 0);
+// Basic host-side flight recording is on by default. Set NCCL_TELEMETRY_ENABLE=0 to disable it.
+NCCL_PARAM(TelemetryEnable, "TELEMETRY_ENABLE", 1);
+NCCL_PARAM(TelemetryLevel, "TELEMETRY_LEVEL", 0);
 
 namespace {
 constexpr uint64_t kCapacity = 1ull << 16;
@@ -104,6 +106,10 @@ void dump() {
 
 void ncclTelemetryFlush() {
   if (ncclParamTelemetryEnable()) dump();
+}
+
+int ncclTelemetryLevel() {
+  return ncclParamTelemetryEnable() ? (int)ncclParamTelemetryLevel() : -1;
 }
 
 void ensureInitialized() {
