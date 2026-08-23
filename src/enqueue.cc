@@ -1818,23 +1818,8 @@ ncclResult_t ncclLaunchKernelAfter_NoCuda(struct ncclComm* comm, struct ncclKern
 }
 
 namespace {
-  struct KernelFinishCallback {
-    struct ncclCommEventCallback base;
-    uint32_t workFifoConsumed;
-  };
-  ncclResult_t KernelFinishCallback_fn(
-      struct ncclComm* comm, struct ncclCommEventCallback* cb
-    ) {
-    struct KernelFinishCallback* me = (struct KernelFinishCallback*)cb;
-    comm->workFifoConsumed = me->workFifoConsumed;
-    CUDACHECK(cudaEventDestroy(me->base.event));
-    free(me);
-    return ncclSuccess;
-  }
-}
-
-ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
-  if (ncclTelemetryLevel() >= NCCL_TELEM_EXECUTION && comm->profiler.workStarted != nullptr) {
+  static void ncclTelemetryCaptureCompletedWork(struct ncclComm* comm) {
+    if (ncclTelemetryLevel() < NCCL_TELEM_EXECUTION || comm->profiler.workStarted == nullptr) return;
     for (int c = 0; c < comm->nChannels; c++) {
       uint64_t counter = comm->profiler.workCounter[c];
       if (counter == 0) continue;
@@ -1847,6 +1832,24 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
         ncclTelemetryRecordWork(comm->rank, c, counter, end.timestamp, true);
     }
   }
+  struct KernelFinishCallback {
+    struct ncclCommEventCallback base;
+    uint32_t workFifoConsumed;
+  };
+  ncclResult_t KernelFinishCallback_fn(
+      struct ncclComm* comm, struct ncclCommEventCallback* cb
+    ) {
+    struct KernelFinishCallback* me = (struct KernelFinishCallback*)cb;
+    comm->workFifoConsumed = me->workFifoConsumed;
+    ncclTelemetryCaptureCompletedWork(comm);
+    CUDACHECK(cudaEventDestroy(me->base.event));
+    free(me);
+    return ncclSuccess;
+  }
+}
+
+ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
+  ncclTelemetryCaptureCompletedWork(comm);
   struct ncclKernelPlanner* planner = &comm->planner;
   if (!ncclIntruQueueEmpty(&planner->planQueue)) {
     // Reset queue to empty without destroying plans since those will be sent
@@ -1858,7 +1861,8 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
     cudaEvent_t finishedEvent = comm->sharedRes->scratchEvent;
     CUDACHECK(cudaEventRecord(finishedEvent, launchStream));
 
-    if (comm->workFifoProduced - comm->workFifoProducedLastRecorded > comm->workFifoBytes/8) {
+    if (ncclTelemetryLevel() >= NCCL_TELEM_EXECUTION ||
+        comm->workFifoProduced - comm->workFifoProducedLastRecorded > comm->workFifoBytes/8) {
       comm->workFifoProducedLastRecorded = comm->workFifoProduced;
       struct KernelFinishCallback* cb;
       NCCLCHECK(ncclCalloc(&cb, 1));
