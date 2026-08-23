@@ -1847,7 +1847,6 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
         ncclTelemetryRecordWork(comm->rank, c, counter, end.timestamp, true);
     }
   }
-  ncclTelemetryFlush();
   struct ncclKernelPlanner* planner = &comm->planner;
   if (!ncclIntruQueueEmpty(&planner->planQueue)) {
     // Reset queue to empty without destroying plans since those will be sent
