@@ -1831,6 +1831,19 @@ namespace {
 }
 
 ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
+  if (ncclTelemetryLevel() >= NCCL_TELEM_EXECUTION && comm->profiler.workStarted != nullptr) {
+    for (int c = 0; c < comm->nChannels; c++) {
+      uint64_t counter = comm->profiler.workCounter[c];
+      if (counter == 0) continue;
+      int slot = counter % MAX_PROFILER_EVENTS_PER_CHANNEL;
+      auto start = comm->profiler.workStarted[c].data[slot];
+      auto end = comm->profiler.workCompleted[c].data[slot];
+      if (start.counter == counter)
+        ncclTelemetryRecordWork(comm->rank, c, counter, start.timestamp, false);
+      if (end.counter == counter)
+        ncclTelemetryRecordWork(comm->rank, c, counter, end.timestamp, true);
+    }
+  }
   ncclTelemetryFlush();
   struct ncclKernelPlanner* planner = &comm->planner;
   if (!ncclIntruQueueEmpty(&planner->planQueue)) {

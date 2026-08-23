@@ -14,7 +14,9 @@ enum ncclTelemetryEventType : uint16_t {
   NCCL_TELEM_PLAN_LAUNCH = 3,
   NCCL_TELEM_PROXY_OP = 4,
   NCCL_TELEM_TRANSPORT_CONNECT = 5,
-  NCCL_TELEM_RING_EDGE = 6
+  NCCL_TELEM_RING_EDGE = 6,
+  NCCL_TELEM_WORK_START = 7,
+  NCCL_TELEM_WORK_END = 8
 };
 
 enum ncclTelemetryLevel : uint8_t {
@@ -52,5 +54,6 @@ void ncclTelemetryRecordProxy(uint64_t planId, int rank, int channel, int patter
                               size_t bytes, uint64_t opCount);
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport);
 void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next);
+void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t timestamp, bool end);
 
 #endif

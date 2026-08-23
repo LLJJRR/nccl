@@ -95,6 +95,13 @@ void dump() {
       fprintf(text, "[%llu ns] RING rank=%u ch=%u prev=%u next=%u\n",
               (unsigned long long)e.timestampNs, e.rank, e.channel, e.algorithm, e.protocol);
       break;
+    case NCCL_TELEM_WORK_START:
+    case NCCL_TELEM_WORK_END:
+      fprintf(text, "[%llu ns] WORK_%s rank=%u ch=%u counter=%llu gpu_timer=%llu\n",
+              (unsigned long long)e.timestampNs,
+              e.eventType == NCCL_TELEM_WORK_START ? "START" : "END", e.rank, e.channel,
+              (unsigned long long)e.collectiveId, (unsigned long long)e.value);
+      break;
     default:
       fprintf(text, "[%llu ns] EVENT type=%u\n", (unsigned long long)e.timestampNs, e.eventType);
       break;
@@ -172,6 +179,11 @@ void ncclTelemetryRecordProxy(uint64_t planId, int rank, int channel, int patter
 
 void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next) {
   record(NCCL_TELEM_RING_EDGE, 0, 0, rank, channel, 0, prev, next, 0, 0, 0);
+}
+
+void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t timestamp, bool end) {
+  record(end ? NCCL_TELEM_WORK_END : NCCL_TELEM_WORK_START, counter, 0, rank, channel,
+         0, 0, 0, 0, 0, timestamp);
 }
 
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport) {
