@@ -1822,7 +1822,7 @@ void ncclTelemetryCaptureCompletedWork(struct ncclComm* comm) {
     for (int c = 0; c < comm->nChannels; c++) {
       uint64_t counter = comm->profiler.workCounter[c];
       if (counter == 0) continue;
-      uint64_t first = comm->profiler.telemetryCaptured[c] + 1;
+      uint64_t first = std::min(comm->profiler.telemetryStartCaptured[c], comm->profiler.telemetryEndCaptured[c]) + 1;
       if (counter - first >= MAX_PROFILER_EVENTS_PER_CHANNEL) first = counter - MAX_PROFILER_EVENTS_PER_CHANNEL + 1;
       for (uint64_t wc = first; wc <= counter; wc++) {
         int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
@@ -1831,12 +1831,15 @@ void ncclTelemetryCaptureCompletedWork(struct ncclComm* comm) {
       if (end.counter != 0) {
         ncclTelemetryRecordWorkSnapshot(comm->rank, c, counter, end.counter);
       }
-        if (start.counter == wc)
+        if (start.counter == wc && wc > comm->profiler.telemetryStartCaptured[c]) {
           ncclTelemetryRecordWork(comm->rank, c, wc, start.timestamp, false);
-        if (end.counter == wc)
+          comm->profiler.telemetryStartCaptured[c] = wc;
+        }
+        if (end.counter == wc && wc > comm->profiler.telemetryEndCaptured[c]) {
           ncclTelemetryRecordWork(comm->rank, c, wc, end.timestamp, true);
+          comm->profiler.telemetryEndCaptured[c] = wc;
+        }
       }
-      comm->profiler.telemetryCaptured[c] = counter;
     }
 }
 
