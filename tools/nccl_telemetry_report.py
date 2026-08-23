@@ -43,8 +43,8 @@ for rank, vals in sorted(by_rank.items()):
         starts = [x[4] for x in batch]
         ends = [x[5] for x in batch]
         if len(batch) > 1 and max(starts) > min(starts):
-            print(f'diagnostic=late_arrival:rank={rank}:counter={counter}:spread_ns={max(starts)-min(starts)}')
+            print(f'diagnostic=late_arrival_proxy:rank={rank}:counter={counter}:spread_ns={max(starts)-min(starts)}')
         if len(batch) > 1 and max(ends) > min(ends):
-            print(f'diagnostic=completion_skew:rank={rank}:counter={counter}:spread_ns={max(ends)-min(ends)}')
+            print(f'diagnostic=completion_skew_proxy:rank={rank}:counter={counter}:spread_ns={max(ends)-min(ends)}')
     if imbalance > .10: print(f'diagnostic=channel_imbalance:rank={rank}:ratio={imbalance:.3f}')
 if not rows: print('diagnostic=no_matched_gpu_work_pairs')
