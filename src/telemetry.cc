@@ -107,6 +107,14 @@ void dump() {
               (unsigned long long)e.timestampNs, e.rank, e.channel,
               (unsigned long long)e.collectiveId, (unsigned long long)e.value);
       break;
+    case NCCL_TELEM_FIRST_STEP:
+    case NCCL_TELEM_LAST_STEP:
+      fprintf(text, "[%llu ns] %s rank=%u ch=%u counter=%llu value=%llu\n",
+              (unsigned long long)e.timestampNs,
+              e.eventType == NCCL_TELEM_FIRST_STEP ? "FIRST_STEP" : "LAST_STEP",
+              e.rank, e.channel, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.value);
+      break;
     default:
       fprintf(text, "[%llu ns] EVENT type=%u\n", (unsigned long long)e.timestampNs, e.eventType);
       break;

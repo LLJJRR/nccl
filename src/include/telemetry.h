@@ -17,7 +17,9 @@ enum ncclTelemetryEventType : uint16_t {
   NCCL_TELEM_RING_EDGE = 6,
   NCCL_TELEM_WORK_START = 7,
   NCCL_TELEM_WORK_END = 8,
-  NCCL_TELEM_WORK_SNAPSHOT = 9
+  NCCL_TELEM_WORK_SNAPSHOT = 9,
+  NCCL_TELEM_FIRST_STEP = 10,
+  NCCL_TELEM_LAST_STEP = 11
 };
 
 enum ncclTelemetryLevel : uint8_t {
