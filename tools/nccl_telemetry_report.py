@@ -5,6 +5,7 @@ work = re.compile(r"\[(\d+) ns\] WORK_(START|END) rank=(\d+) ch=(\d+) counter=(\
 trans = re.compile(r"TRANSPORT .*type=(\w+)")
 events, transports = defaultdict(dict), Counter()
 collectives = defaultdict(lambda: {'ranks': set(), 'payload': 0, 'traffic': 0, 'first': [], 'last': []})
+transfers = defaultdict(lambda: {'bytes': 0, 'ops': 0, 'first': None, 'last': None, 'peers': set()})
 host_times = []
 for path in sys.argv[1:]:
     with open(path, errors="replace") as f:
@@ -16,6 +17,11 @@ for path in sys.argv[1:]:
                 host_times.append((int(timer), int(host)))
             m = trans.search(line)
             if m: transports[m.group(1)] += 1
+            m = re.search(r"TRANSFER op=(\d+) rank=(\d+) ch=(\d+) peer=(\d+) transport=(\d+) step=(\d+) bytes=(\d+)", line)
+            if m:
+                op, rank, ch, peer, transport, step, bytes_ = map(int, m.groups())
+                t = transfers[(op, rank, ch)]; t['bytes'] += bytes_; t['ops'] += 1; t['peers'].add(peer)
+                ts = int(line.split('[',1)[1].split(' ',1)[0]); t['first'] = ts if t['first'] is None else min(t['first'], ts); t['last'] = ts if t['last'] is None else max(t['last'], ts)
             m = re.search(r"COLLECTIVE id=(\d+) rank=(\d+) type=(\S+) payload=(\d+) traffic=(\d+)", line)
             if m:
                 cid, rank, typ, payload, traffic = m.groups(); c = collectives[(int(cid), typ)]
@@ -36,6 +42,9 @@ if host_times:
     print(f'gpu_timer_range_ticks={tr} host_range_ns={hr} calibrated_tick_ns={(hr/tr):.6f}' if tr else f'gpu_timer_range_ticks=0 host_range_ns={hr}')
 if transports:
     print('transports=' + ', '.join(f'{k}:{v}' for k,v in sorted(transports.items())))
+for (op, rank, ch), t in sorted(transfers.items()):
+    duration = max(1, (t['last'] or 0) - (t['first'] or 0)); bw = t['bytes'] * 1e9 / duration
+    print(f'channel_transfer=op:{op}:rank:{rank}:ch:{ch}:bytes:{t["bytes"]}:ops:{t["ops"]}:peers:{sorted(t["peers"])}:duration_ns:{duration}:bandwidth_Bps:{bw:.1f}')
 by_rank = defaultdict(list)
 for (rank, ch, counter), duration, host_duration, start_ns, end_ns in rows: by_rank[rank].append((ch, counter, duration, host_duration, start_ns, end_ns))
 for rank, vals in sorted(by_rank.items()):

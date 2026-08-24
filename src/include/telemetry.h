@@ -20,6 +20,7 @@ enum ncclTelemetryEventType : uint16_t {
   NCCL_TELEM_WORK_SNAPSHOT = 9,
   NCCL_TELEM_FIRST_STEP = 10,
   NCCL_TELEM_LAST_STEP = 11
+  ,NCCL_TELEM_CHANNEL_TRANSFER = 12
 };
 
 enum ncclTelemetryLevel : uint8_t {
@@ -60,5 +61,7 @@ void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next);
 void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t timestamp, bool end);
 void ncclTelemetryRecordWorkSnapshot(int rank, int channel, uint64_t counter, uint64_t value);
 void ncclTelemetryRecordStep(int rank, int channel, uint64_t step, bool last);
+void ncclTelemetryRecordTransfer(uint64_t opCount, int rank, int channel, int peer,
+                                 int transport, uint64_t step, size_t bytes);
 
 #endif
