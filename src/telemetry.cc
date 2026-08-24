@@ -203,6 +203,10 @@ void ncclTelemetryRecordWorkSnapshot(int rank, int channel, uint64_t counter, ui
   record(NCCL_TELEM_WORK_SNAPSHOT, counter, 0, rank, channel, 0, 0, 0, 0, 0, value);
 }
 
+void ncclTelemetryRecordStep(int rank, int channel, uint64_t step, bool last) {
+  record(last ? NCCL_TELEM_LAST_STEP : NCCL_TELEM_FIRST_STEP, step, 0, rank, channel, 0, 0, 0, 0, 0, step);
+}
+
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport) {
   record(NCCL_TELEM_TRANSPORT_CONNECT, 0, 0, rank, channel, 0, transport, connIndex,
          0, 0, uint64_t(uint32_t(peer)));

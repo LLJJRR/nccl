@@ -14,6 +14,7 @@
 #include "shmutils.h"
 #include "p2p.h"
 #include "profiler.h"
+#include "telemetry.h"
 #include "transport.h"
 #include "shm.h"
 #include "compiler.h"
@@ -1278,6 +1279,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
       // Post buffers to the GPU
       if (sub->posted < sub->nsteps && sub->posted < sub->done + maxDepth) {
         ncclProfilerStartSendProxyStepEvent(s, args, postedStepId);
+        if (postedStepId == 0) ncclTelemetryRecordStep(proxyState->comm->rank, sub->channelId, postedStepId, false);
         int buffSlot = (sub->base+sub->posted)%NCCL_STEPS;
         if (resources->shared) {
           if (!sub->reg) {
@@ -1374,6 +1376,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
           TRACE(NCCL_NET, "sendProxy [%ld/%d/%d] request %p done", sub->done, buffSlot, sub->nsteps, sub->requests[buffSlot]);
           sub->done += args->sliceSteps;
           ncclProfilerStopProxyStepEvent(s, args, doneStepId);
+          if (doneStepId + args->sliceSteps >= sub->nsteps) ncclTelemetryRecordStep(proxyState->comm->rank, sub->channelId, doneStepId, true);
 
           if (resources->shared == 0) {
             volatile uint64_t* sendHead = resources->gdcSync ? resources->gdcSync : &resources->sendMem->head;
@@ -1460,6 +1463,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
         if (sub->posted < sub->nsteps) {
           if (sub->posted >= sub->done + maxDepth) { subCount = 0; break; }
           ncclProfilerStartRecvProxyStepEvent(s+i, args, postedStepId);
+          if (postedStepId == 0) ncclTelemetryRecordStep(proxyState->comm->rank, sub->channelId, postedStepId, false);
           struct recvNetResources* resources = (struct recvNetResources*) (sub->connection->transportResources);
           int stepSize = resources->buffSizes[p] / NCCL_STEPS;
           char* localBuff = NCCL_NET_MAP_GET_POINTER(&resources->map, cpu, buffs[p]);
@@ -1648,6 +1652,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
             int doneStepId = sub->done;
             sub->done += args->sliceSteps;
             ncclProfilerStopProxyStepEvent(s+i, args, doneStepId);
+            if (doneStepId + args->sliceSteps >= sub->nsteps) ncclTelemetryRecordStep(proxyState->comm->rank, sub->channelId, doneStepId, true);
             args->idle = 0;
             if (sub->done == sub->nsteps) {
               args->done++;

@@ -59,5 +59,6 @@ void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex
 void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next);
 void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t timestamp, bool end);
 void ncclTelemetryRecordWorkSnapshot(int rank, int channel, uint64_t counter, uint64_t value);
+void ncclTelemetryRecordStep(int rank, int channel, uint64_t step, bool last);
 
 #endif
