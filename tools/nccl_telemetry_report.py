@@ -34,6 +34,11 @@ rows = [(k, v['END'][0]-v['START'][0], v['END'][1]-v['START'][1], v['START'][1],
         if 'START' in v and 'END' in v and v['END'][0] >= v['START'][0]]
 print('NCCL Telemetry Report')
 print(f'matched_work_events={len(rows)} input_files={len(sys.argv)-1}')
+if rows:
+    counters = sorted({k[2] for k, _d, _h, _s, _e in rows})
+    if len(counters) > 1:
+        gaps = [b-a for a,b in zip(counters,counters[1:])]
+        if max(gaps, default=1) > 1: print(f'work_sampling=max_counter_gap:{max(gaps)}')
 ring = []
 with open(sys.argv[1], errors='replace') as f:
     for line in f:

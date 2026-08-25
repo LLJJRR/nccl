@@ -201,6 +201,8 @@ void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next) {
 }
 
 void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t timestamp, bool end) {
+  // Execution telemetry samples short-lived work items; diagnostic keeps every event.
+  if (ncclTelemetryLevel() == NCCL_TELEM_EXECUTION && (counter & 3ull) != 0) return;
   record(end ? NCCL_TELEM_WORK_END : NCCL_TELEM_WORK_START, counter, 0, rank, channel,
          0, 0, 0, 0, 0, timestamp);
 }
