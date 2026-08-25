@@ -216,7 +216,8 @@ void ncclTelemetryRecordStep(int rank, int channel, uint64_t step, bool last) {
 
 void ncclTelemetryRecordTransfer(uint64_t opCount, int rank, int channel, int peer,
                                  int transport, uint64_t step, size_t bytes) {
-  if (ncclTelemetryLevel() < NCCL_TELEM_EXECUTION) return;
+  // Per-step transfer events are diagnostic detail; keep them off the normal execution path.
+  if (ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
   record(NCCL_TELEM_CHANNEL_TRANSFER, opCount, 0, rank, channel, 0, peer, transport,
          bytes, bytes, step);
 }

@@ -49,7 +49,7 @@ if transports:
 for (op, rank, ch), t in sorted(transfers.items()):
     ww = work_windows[(rank, ch)]
     duration = (ww['last'] - ww['first']) if ww['first'] is not None and ww['last'] is not None else (t['last'] or 0) - (t['first'] or 0)
-    duration = max(1, duration); bw = t['bytes'] * 1e9 / duration
+    duration = max(1, int(duration)); bw = float(t['bytes']) * 1e9 / float(duration)
     print(f'channel_transfer=op:{op}:rank:{rank}:ch:{ch}:bytes:{t["bytes"]}:ops:{t["ops"]}:peers:{sorted(t["peers"])}:duration_ns:{duration}:bandwidth_Bps:{bw:.1f}')
 by_rank = defaultdict(list)
 for (rank, ch, counter), duration, host_duration, start_ns, end_ns in rows: by_rank[rank].append((ch, counter, duration, host_duration, start_ns, end_ns))
