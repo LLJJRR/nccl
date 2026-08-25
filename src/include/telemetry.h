@@ -19,8 +19,8 @@ enum ncclTelemetryEventType : uint16_t {
   NCCL_TELEM_WORK_END = 8,
   NCCL_TELEM_WORK_SNAPSHOT = 9,
   NCCL_TELEM_FIRST_STEP = 10,
-  NCCL_TELEM_LAST_STEP = 11
-  ,NCCL_TELEM_CHANNEL_TRANSFER = 12
+  NCCL_TELEM_LAST_STEP = 11,
+  NCCL_TELEM_CHANNEL_TRANSFER = 12
 };
 
 enum ncclTelemetryLevel : uint8_t {

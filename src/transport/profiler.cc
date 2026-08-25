@@ -40,8 +40,9 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
         continue; // allow events on every channel to start
       }
       if (sub->transmitted < sub->nsteps && sub->base <= workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter) {
-        ncclTelemetryRecordWorkSnapshot(proxyState->comm->rank, sub->channelId, sub->base,
-          workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter);
+        if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC)
+          ncclTelemetryRecordWorkSnapshot(proxyState->comm->rank, sub->channelId, sub->base,
+            workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter);
         ncclProfilerStopKernelChEvent(args, s, workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
         sub->transmitted = sub->nsteps;
         args->done++;

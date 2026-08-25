@@ -1829,7 +1829,8 @@ void ncclTelemetryCaptureCompletedWork(struct ncclComm* comm) {
         auto start = comm->profiler.workStarted[c].data[slot];
       auto end = comm->profiler.workCompleted[c].data[slot];
       if (end.counter != 0) {
-        ncclTelemetryRecordWorkSnapshot(comm->rank, c, counter, end.counter);
+        if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC)
+          ncclTelemetryRecordWorkSnapshot(comm->rank, c, counter, end.counter);
       }
         if (start.counter == wc && wc > comm->profiler.telemetryStartCaptured[c]) {
           ncclTelemetryRecordWork(comm->rank, c, wc, start.timestamp, false);
