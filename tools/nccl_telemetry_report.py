@@ -6,6 +6,7 @@ trans = re.compile(r"TRANSPORT .*type=(\w+)")
 events, transports = defaultdict(dict), Counter()
 collectives = defaultdict(lambda: {'ranks': set(), 'payload': 0, 'traffic': 0, 'first': [], 'last': []})
 transfers = defaultdict(lambda: {'bytes': 0, 'ops': 0, 'first': None, 'last': None, 'peers': set()})
+work_windows = defaultdict(lambda: {'first': None, 'last': None})
 host_times = []
 for path in sys.argv[1:]:
     with open(path, errors="replace") as f:
@@ -15,6 +16,9 @@ for path in sys.argv[1:]:
                 host, kind, rank, ch, counter, timer = m.groups()
                 events[(int(rank), int(ch), int(counter))][kind] = (int(timer), int(host))
                 host_times.append((int(timer), int(host)))
+                w = work_windows[(int(rank), int(ch))]
+                if kind == 'START': w['first'] = int(host) if w['first'] is None else min(w['first'], int(host))
+                else: w['last'] = int(host) if w['last'] is None else max(w['last'], int(host))
             m = trans.search(line)
             if m: transports[m.group(1)] += 1
             m = re.search(r"TRANSFER op=(\d+) rank=(\d+) ch=(\d+) peer=(\d+) transport=(\d+) step=(\d+) bytes=(\d+)", line)
@@ -43,7 +47,9 @@ if host_times:
 if transports:
     print('transports=' + ', '.join(f'{k}:{v}' for k,v in sorted(transports.items())))
 for (op, rank, ch), t in sorted(transfers.items()):
-    duration = max(1, (t['last'] or 0) - (t['first'] or 0)); bw = t['bytes'] * 1e9 / duration
+    ww = work_windows[(rank, ch)]
+    duration = (ww['last'] - ww['first']) if ww['first'] is not None and ww['last'] is not None else (t['last'] or 0) - (t['first'] or 0)
+    duration = max(1, duration); bw = t['bytes'] * 1e9 / duration
     print(f'channel_transfer=op:{op}:rank:{rank}:ch:{ch}:bytes:{t["bytes"]}:ops:{t["ops"]}:peers:{sorted(t["peers"])}:duration_ns:{duration}:bandwidth_Bps:{bw:.1f}')
 by_rank = defaultdict(list)
 for (rank, ch, counter), duration, host_duration, start_ns, end_ns in rows: by_rank[rank].append((ch, counter, duration, host_duration, start_ns, end_ns))
