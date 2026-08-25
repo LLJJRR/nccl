@@ -121,6 +121,13 @@ void dump() {
               e.rank, e.channel, e.algorithm, e.protocol, (unsigned long long)e.value,
               (unsigned long long)e.payloadBytes);
       break;
+    case NCCL_TELEM_CHANNEL_SUMMARY:
+      fprintf(text, "[%llu ns] CHANNEL_SUMMARY coll=%llu plan=%llu rank=%u ch=%u work=%llu bytes=%llu duration_ns=%llu\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.planId, e.rank, e.channel,
+              (unsigned long long)e.value, (unsigned long long)e.payloadBytes,
+              (unsigned long long)e.trafficBytes);
+      break;
     default:
       fprintf(text, "[%llu ns] EVENT type=%u\n", (unsigned long long)e.timestampNs, e.eventType);
       break;
@@ -220,6 +227,13 @@ void ncclTelemetryRecordTransfer(uint64_t opCount, int rank, int channel, int pe
   if (ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
   record(NCCL_TELEM_CHANNEL_TRANSFER, opCount, 0, rank, channel, 0, peer, transport,
          bytes, bytes, step);
+}
+
+void ncclTelemetryRecordChannelSummary(uint64_t collectiveId, uint64_t planId, int rank,
+                                       int channel, uint64_t workCount, size_t bytes,
+                                       uint64_t durationNs) {
+  record(NCCL_TELEM_CHANNEL_SUMMARY, collectiveId, planId, rank, channel, 0, 0, 0,
+         bytes, durationNs, workCount);
 }
 
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport) {
