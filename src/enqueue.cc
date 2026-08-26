@@ -105,6 +105,10 @@ static inline int ncclFuncTrafficPerByte(ncclFunc_t func, int nRanks) {
 /*****************************************************************************/
 
 ncclResult_t ncclAddProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclProxyOp* op) {
+  bool collective = op->coll != ncclFuncSend && op->coll != ncclFuncRecv;
+  op->telemetryCollectiveId = collective ? op->task.coll->telemetryId : UINT64_MAX;
+  op->telemetryPlanId = uint64_t(reinterpret_cast<uintptr_t>(plan));
+  op->telemetryBytes = op->channelSize;
   ncclTelemetryRecordProxy(uint64_t(reinterpret_cast<uintptr_t>(plan)), comm->rank,
                            op->channelId, op->pattern, op->channelSize, op->opCount);
   bool needed = true;
@@ -567,10 +571,6 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
 }
 
 static ncclResult_t addProfilerProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclProxyOp* op) {
-  bool collective = op->coll != ncclFuncSend && op->coll != ncclFuncRecv;
-  op->telemetryCollectiveId = collective ? op->task.coll->telemetryId : UINT64_MAX;
-  op->telemetryPlanId = uint64_t(reinterpret_cast<uintptr_t>(plan));
-  op->telemetryBytes = op->channelSize;
   int tmp = op->pattern;
   op->pattern = ncclPatternProfiler;
   ncclResult_t ret = ncclAddProxyOpIfNeeded(comm, plan, op);

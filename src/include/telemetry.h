@@ -33,7 +33,8 @@ enum ncclTelemetryLevel : uint8_t {
 
 enum ncclTelemetryDirection : uint8_t {
   NCCL_TELEM_DIRECTION_RECV = 0,
-  NCCL_TELEM_DIRECTION_SEND = 1
+  NCCL_TELEM_DIRECTION_SEND = 1,
+  NCCL_TELEM_DIRECTION_UNKNOWN = 2
 };
 
 enum ncclTelemetryNetBackend : uint8_t {
@@ -87,11 +88,14 @@ void ncclTelemetryRecordNetPath(int rank, int peer, int channel, int connIndex, 
                                 int pathType, bool shared, bool sameDevice, uint64_t guid, int port,
                                 int speed, int railId, int planeId);
 void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next);
-void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t timestamp, bool end);
-void ncclTelemetryRecordWorkSnapshot(int rank, int channel, uint64_t counter, uint64_t value);
+void ncclTelemetryRecordWork(uint64_t collectiveId, uint64_t planId, int rank, int channel,
+                             uint64_t counter, uint64_t timestamp, bool end);
+void ncclTelemetryRecordWorkSnapshot(uint64_t collectiveId, uint64_t planId, int rank, int channel,
+                                     uint64_t counter, uint64_t value);
 void ncclTelemetryRecordStep(int rank, int channel, uint64_t step, bool last);
-void ncclTelemetryRecordTransfer(uint64_t opCount, int rank, int channel, int peer,
-                                 int transport, uint64_t step, size_t bytes);
+void ncclTelemetryRecordTransfer(uint64_t collectiveId, uint64_t planId, uint64_t opCount,
+                                 int rank, int channel, int peer, int direction, int transport,
+                                 uint64_t step, size_t bytes);
 void ncclTelemetryRecordChannelSummary(uint64_t collectiveId, uint64_t planId, int rank,
                                        int channel, uint64_t workCount, size_t bytes,
                                        uint64_t durationNs);

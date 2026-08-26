@@ -126,15 +126,17 @@ void dump() {
       break;
     case NCCL_TELEM_WORK_START:
     case NCCL_TELEM_WORK_END:
-      fprintf(text, "[%llu ns] WORK_%s rank=%u ch=%u counter=%llu gpu_timer=%llu\n",
+      fprintf(text, "[%llu ns] WORK_%s coll=%llu plan=%llu rank=%u ch=%u counter=%llu gpu_timer=%llu\n",
               (unsigned long long)e.timestampNs,
-              e.eventType == NCCL_TELEM_WORK_START ? "START" : "END", e.rank, e.channel,
-              (unsigned long long)e.collectiveId, (unsigned long long)e.value);
+              e.eventType == NCCL_TELEM_WORK_START ? "START" : "END",
+              (unsigned long long)e.collectiveId, (unsigned long long)e.planId, e.rank, e.channel,
+              (unsigned long long)e.trafficBytes, (unsigned long long)e.value);
       break;
     case NCCL_TELEM_WORK_SNAPSHOT:
-      fprintf(text, "[%llu ns] WORK_SNAPSHOT rank=%u ch=%u counter=%llu value=%llu\n",
-              (unsigned long long)e.timestampNs, e.rank, e.channel,
-              (unsigned long long)e.collectiveId, (unsigned long long)e.value);
+      fprintf(text, "[%llu ns] WORK_SNAPSHOT coll=%llu plan=%llu rank=%u ch=%u counter=%llu value=%llu\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.planId, e.rank, e.channel,
+              (unsigned long long)e.trafficBytes, (unsigned long long)e.value);
       break;
     case NCCL_TELEM_FIRST_STEP:
     case NCCL_TELEM_LAST_STEP:
@@ -145,9 +147,12 @@ void dump() {
               (unsigned long long)e.value);
       break;
     case NCCL_TELEM_CHANNEL_TRANSFER:
-      fprintf(text, "[%llu ns] TRANSFER op=%llu rank=%u ch=%u peer=%u transport=%u step=%llu bytes=%llu\n",
+      fprintf(text, "[%llu ns] TRANSFER coll=%llu plan=%llu op=%llu rank=%u ch=%u direction=%s peer=%u transport=%u step=%llu bytes=%llu\n",
               (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
-              e.rank, e.channel, e.algorithm, e.protocol, (unsigned long long)e.value,
+              (unsigned long long)e.planId, (unsigned long long)e.trafficBytes, e.rank, e.channel,
+              e.collective == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
+              e.collective == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
+              e.algorithm, e.protocol, (unsigned long long)e.value,
               (unsigned long long)e.payloadBytes);
       break;
     case NCCL_TELEM_CHANNEL_SUMMARY:
@@ -281,14 +286,16 @@ void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next) {
   record(NCCL_TELEM_RING_EDGE, 0, 0, rank, channel, 0, prev, next, 0, 0, 0);
 }
 
-void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t timestamp, bool end) {
+void ncclTelemetryRecordWork(uint64_t collectiveId, uint64_t planId, int rank, int channel,
+                             uint64_t counter, uint64_t timestamp, bool end) {
   if (ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
-  record(end ? NCCL_TELEM_WORK_END : NCCL_TELEM_WORK_START, counter, 0, rank, channel,
-         0, 0, 0, 0, 0, timestamp);
+  record(end ? NCCL_TELEM_WORK_END : NCCL_TELEM_WORK_START, collectiveId, planId, rank, channel,
+         0, 0, 0, 0, counter, timestamp);
 }
 
-void ncclTelemetryRecordWorkSnapshot(int rank, int channel, uint64_t counter, uint64_t value) {
-  record(NCCL_TELEM_WORK_SNAPSHOT, counter, 0, rank, channel, 0, 0, 0, 0, 0, value);
+void ncclTelemetryRecordWorkSnapshot(uint64_t collectiveId, uint64_t planId, int rank, int channel,
+                                     uint64_t counter, uint64_t value) {
+  record(NCCL_TELEM_WORK_SNAPSHOT, collectiveId, planId, rank, channel, 0, 0, 0, 0, counter, value);
 }
 
 void ncclTelemetryRecordStep(int rank, int channel, uint64_t step, bool last) {
@@ -296,12 +303,13 @@ void ncclTelemetryRecordStep(int rank, int channel, uint64_t step, bool last) {
   record(last ? NCCL_TELEM_LAST_STEP : NCCL_TELEM_FIRST_STEP, step, 0, rank, channel, 0, 0, 0, 0, 0, step);
 }
 
-void ncclTelemetryRecordTransfer(uint64_t opCount, int rank, int channel, int peer,
-                                 int transport, uint64_t step, size_t bytes) {
+void ncclTelemetryRecordTransfer(uint64_t collectiveId, uint64_t planId, uint64_t opCount,
+                                 int rank, int channel, int peer, int direction, int transport,
+                                 uint64_t step, size_t bytes) {
   // Per-step transfer events are diagnostic detail; keep them off the normal execution path.
   if (ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
-  record(NCCL_TELEM_CHANNEL_TRANSFER, opCount, 0, rank, channel, 0, peer, transport,
-         bytes, bytes, step);
+  record(NCCL_TELEM_CHANNEL_TRANSFER, collectiveId, planId, rank, channel, direction, peer,
+         transport, bytes, opCount, step);
 }
 
 void ncclTelemetryRecordChannelSummary(uint64_t collectiveId, uint64_t planId, int rank,

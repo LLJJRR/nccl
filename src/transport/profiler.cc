@@ -38,7 +38,8 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
       struct ncclDevProfiler* workCompleted = (struct ncclDevProfiler *)sub->recvbuff;
       if (sub->posted < sub->nsteps && sub->base <= workStarted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter) {
         sub->telemetryStart = workStarted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp;
-        ncclTelemetryRecordWork(proxyState->comm->rank, sub->channelId, sub->base,
+        ncclTelemetryRecordWork(sub->telemetryCollectiveId, sub->telemetryPlanId,
+                                proxyState->comm->rank, sub->channelId, sub->base,
                                 sub->telemetryStart, false);
         ncclProfilerStartKernelChEvent(args, s, workStarted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
         sub->posted = sub->nsteps;
@@ -46,7 +47,8 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
       }
       if (sub->transmitted < sub->nsteps && sub->base <= workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter) {
         uint64_t telemetryEnd = workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp;
-        ncclTelemetryRecordWork(proxyState->comm->rank, sub->channelId, sub->base,
+        ncclTelemetryRecordWork(sub->telemetryCollectiveId, sub->telemetryPlanId,
+                                proxyState->comm->rank, sub->channelId, sub->base,
                                 telemetryEnd, true);
         if (ncclTelemetryLevel() == NCCL_TELEM_EXECUTION && sub->telemetryCollectiveId != UINT64_MAX) {
           uint64_t duration = telemetryEnd >= sub->telemetryStart ? telemetryEnd - sub->telemetryStart : 0;
@@ -55,7 +57,8 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
             uint32_t(proxyState->comm->rank), uint16_t(sub->channelId)};
         }
         if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC)
-          ncclTelemetryRecordWorkSnapshot(proxyState->comm->rank, sub->channelId, sub->base,
+          ncclTelemetryRecordWorkSnapshot(sub->telemetryCollectiveId, sub->telemetryPlanId,
+            proxyState->comm->rank, sub->channelId, sub->base,
             workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter);
         ncclProfilerStopKernelChEvent(args, s, workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
         // The profiler proxy emits one aggregate transfer for the completed channel work.
@@ -63,8 +66,10 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
         // carries the complete channel work size from the planner.
         size_t transferBytes = sub->telemetryCollectiveId != UINT64_MAX && sub->telemetryBytes > 0 ?
           size_t(sub->telemetryBytes) : (sub->nbytes > 0 ? size_t(sub->nbytes) : 0);
-        ncclTelemetryRecordTransfer(args->opCount, proxyState->comm->rank, sub->channelId,
-                                    sub->peer, 0, sub->base, transferBytes);
+        ncclTelemetryRecordTransfer(sub->telemetryCollectiveId, sub->telemetryPlanId,
+                                    args->opCount, proxyState->comm->rank, sub->channelId,
+                                    sub->peer, NCCL_TELEM_DIRECTION_UNKNOWN, 0, sub->base,
+                                    transferBytes);
         sub->transmitted = sub->nsteps;
         args->done++;
       }

@@ -385,8 +385,10 @@ static ncclResult_t shmSendProxyProgress(struct ncclProxyState* proxyState, stru
         cudaError_t res = CUDACLEARERROR(cudaEventQuery(resources->events[buffSlot]));
         if (res != cudaErrorNotReady) CUDACHECK(res);
         if (res == cudaSuccess) {
-          ncclTelemetryRecordTransfer(args->opCount, proxyState->comm->rank, sub->channelId,
-                                      sub->peer, 1, sub->done, sub->nbytes > 0 ?
+          ncclTelemetryRecordTransfer(sub->telemetryCollectiveId, sub->telemetryPlanId,
+                                      args->opCount, proxyState->comm->rank, sub->channelId,
+                                      sub->peer, NCCL_TELEM_DIRECTION_SEND, 1, sub->done,
+                                      sub->nbytes > 0 ?
                                       size_t(sub->nbytes) * args->sliceSteps / sub->nsteps : 0);
           sub->done += args->sliceSteps;
           // Notify SHM

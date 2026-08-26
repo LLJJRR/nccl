@@ -1420,8 +1420,10 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
           TRACE(NCCL_NET, "sendProxy [%ld/%d/%d] request %p done", sub->done, buffSlot, sub->nsteps, sub->requests[buffSlot]);
           sub->done += args->sliceSteps;
           ncclProfilerStopProxyStepEvent(s, args, doneStepId);
-          ncclTelemetryRecordTransfer(args->opCount, proxyState->comm->rank, sub->channelId,
-                                      sub->peer, 2, doneStepId, sub->transSize);
+          ncclTelemetryRecordTransfer(sub->telemetryCollectiveId, sub->telemetryPlanId,
+                                      args->opCount, proxyState->comm->rank, sub->channelId,
+                                      sub->peer, NCCL_TELEM_DIRECTION_SEND, 2, doneStepId,
+                                      sub->transSize);
           if (doneStepId + args->sliceSteps >= sub->nsteps) ncclTelemetryRecordStep(proxyState->comm->rank, sub->channelId, doneStepId, true);
 
           if (resources->shared == 0) {
@@ -1698,8 +1700,10 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
             int doneStepId = sub->done;
             sub->done += args->sliceSteps;
             ncclProfilerStopProxyStepEvent(s+i, args, doneStepId);
-            ncclTelemetryRecordTransfer(args->opCount, proxyState->comm->rank, sub->channelId,
-                                        sub->peer, 2, doneStepId, sub->transSize);
+            ncclTelemetryRecordTransfer(sub->telemetryCollectiveId, sub->telemetryPlanId,
+                                        args->opCount, proxyState->comm->rank, sub->channelId,
+                                        sub->peer, NCCL_TELEM_DIRECTION_RECV, 2, doneStepId,
+                                        sub->transSize);
             if (doneStepId + args->sliceSteps >= sub->nsteps) ncclTelemetryRecordStep(proxyState->comm->rank, sub->channelId, doneStepId, true);
             args->idle = 0;
             if (sub->done == sub->nsteps) {
