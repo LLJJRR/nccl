@@ -21,6 +21,8 @@ static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection,
 // - posted     : is set to sub->nsteps to indicate that the profiler has started the event
 // - transmitted: is set to sub->nsteps to indicate that the profiler has stopped the event
 static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, struct ncclProxyArgs* args) {
+  ncclTelemetryChannelSummary summaries[NCCL_PROXY_MAX_SUBS];
+  size_t summaryCount = 0;
   if (args->state == ncclProxyOpReady) {
     for (int s = 0; s < args->nsubs; s++) {
       struct ncclProxySubArgs* sub = args->subs + s;
@@ -48,9 +50,9 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
                                 telemetryEnd, true);
         if (ncclTelemetryLevel() == NCCL_TELEM_EXECUTION && sub->telemetryCollectiveId != UINT64_MAX) {
           uint64_t duration = telemetryEnd >= sub->telemetryStart ? telemetryEnd - sub->telemetryStart : 0;
-          ncclTelemetryRecordChannelSummary(sub->telemetryCollectiveId, sub->telemetryPlanId,
-                                            proxyState->comm->rank, sub->channelId, 1,
-                                            sub->telemetryBytes, duration);
+          summaries[summaryCount++] = ncclTelemetryChannelSummary{
+            sub->telemetryCollectiveId, sub->telemetryPlanId, 1, sub->telemetryBytes, duration,
+            uint32_t(proxyState->comm->rank), uint16_t(sub->channelId)};
         }
         if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC)
           ncclTelemetryRecordWorkSnapshot(proxyState->comm->rank, sub->channelId, sub->base,
@@ -64,6 +66,7 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
         args->done++;
       }
     }
+    ncclTelemetryRecordChannelSummaries(summaries, summaryCount);
     if (args->done == args->nsubs) args->state = ncclProxyOpNone;
   }
   return ncclSuccess;

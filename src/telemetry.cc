@@ -280,8 +280,36 @@ void ncclTelemetryRecordTransfer(uint64_t opCount, int rank, int channel, int pe
 void ncclTelemetryRecordChannelSummary(uint64_t collectiveId, uint64_t planId, int rank,
                                        int channel, uint64_t workCount, size_t bytes,
                                        uint64_t durationNs) {
-  record(NCCL_TELEM_CHANNEL_SUMMARY, collectiveId, planId, rank, channel, 0, 0, 0,
-         bytes, durationNs, workCount);
+  ncclTelemetryChannelSummary summary{collectiveId, planId, workCount, uint64_t(bytes),
+                                      durationNs, uint32_t(rank), uint16_t(channel)};
+  ncclTelemetryRecordChannelSummaries(&summary, 1);
+}
+
+void ncclTelemetryRecordChannelSummaries(const ncclTelemetryChannelSummary* summaries,
+                                         size_t count) {
+  constexpr size_t kBatchSize = 64;
+  ncclTelemetryEvent events[kBatchSize];
+  while (count != 0) {
+    size_t batch = count < kBatchSize ? count : kBatchSize;
+    uint64_t timestamp = nowNs();
+    for (size_t i = 0; i < batch; ++i) {
+      const ncclTelemetryChannelSummary& summary = summaries[i];
+      ncclTelemetryEvent& event = events[i];
+      memset(&event, 0, sizeof(event));
+      event.timestampNs = timestamp;
+      event.collectiveId = summary.collectiveId;
+      event.planId = summary.planId;
+      event.rank = summary.rank;
+      event.channel = summary.channel;
+      event.eventType = NCCL_TELEM_CHANNEL_SUMMARY;
+      event.payloadBytes = summary.bytes;
+      event.trafficBytes = summary.durationNs;
+      event.value = summary.workCount;
+    }
+    recordBatch(events, batch);
+    summaries += batch;
+    count -= batch;
+  }
 }
 
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport,

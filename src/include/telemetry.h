@@ -46,6 +46,16 @@ struct ncclTelemetryEvent {
   uint64_t value;
 };
 
+struct ncclTelemetryChannelSummary {
+  uint64_t collectiveId;
+  uint64_t planId;
+  uint64_t workCount;
+  uint64_t bytes;
+  uint64_t durationNs;
+  uint32_t rank;
+  uint16_t channel;
+};
+
 void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collective,
                                    size_t payloadBytes, size_t trafficBytes);
 uint64_t ncclTelemetryNextCollectiveId();
@@ -68,5 +78,7 @@ void ncclTelemetryRecordTransfer(uint64_t opCount, int rank, int channel, int pe
 void ncclTelemetryRecordChannelSummary(uint64_t collectiveId, uint64_t planId, int rank,
                                        int channel, uint64_t workCount, size_t bytes,
                                        uint64_t durationNs);
+void ncclTelemetryRecordChannelSummaries(const ncclTelemetryChannelSummary* summaries,
+                                         size_t count);
 
 #endif
