@@ -12,6 +12,7 @@
 #include "timer.h"
 #include "transport.h"
 #include "telemetry.h"
+#include "graph/topo.h"
 
 struct ncclTransport* ncclTransports[NTRANSPORTS+1] = {
   &p2pTransport,
@@ -36,7 +37,15 @@ static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph*
       connector->transportComm = transportComm;
       NCCLCHECK(transportComm->setup(comm, graph, myInfo, peerInfo, connect, connector, channelId, connIndex));
       if (transportType) *transportType = t;
-      ncclTelemetryRecordTransport(comm->rank, channelId, peer, connIndex, t);
+      int pathType = PATH_DIS;
+      int srcIndex = -1, dstIndex = -1;
+      if (comm->topo != nullptr &&
+          ncclTopoRankToIndex(comm->topo, comm->rank, &srcIndex, false) == ncclSuccess &&
+          ncclTopoRankToIndex(comm->topo, peer, &dstIndex, false) == ncclSuccess) {
+        struct ncclTopoLinkList* paths = comm->topo->nodes[GPU].nodes[srcIndex].paths[GPU];
+        if (paths != nullptr) pathType = paths[dstIndex].type;
+      }
+      ncclTelemetryRecordTransport(comm->rank, channelId, peer, connIndex, t, pathType);
       return ncclSuccess;
     }
   }

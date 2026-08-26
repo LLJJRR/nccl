@@ -57,7 +57,8 @@ void ncclTelemetryRecordChannel(uint64_t collectiveId, uint64_t planId, int rank
 void ncclTelemetryRecordPlan(uint64_t planId, int rank, uint64_t channelMask, int nCollectives);
 void ncclTelemetryRecordProxy(uint64_t planId, int rank, int channel, int pattern,
                               size_t bytes, uint64_t opCount);
-void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport);
+void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport,
+                                  int pathType);
 void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next);
 void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t timestamp, bool end);
 void ncclTelemetryRecordWorkSnapshot(int rank, int channel, uint64_t counter, uint64_t value);
