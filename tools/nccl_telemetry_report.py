@@ -5,9 +5,9 @@ if len(sys.argv) < 2:
     print(f'usage: {sys.argv[0]} <telemetry.txt> [telemetry2.txt ...]', file=sys.stderr)
     sys.exit(2)
 work = re.compile(r"\[(\d+) ns\] WORK_(START|END) rank=(\d+) ch=(\d+) counter=(\d+) gpu_timer=(\d+)")
-trans = re.compile(r"TRANSPORT .*type=(\w+)")
 events, transports = defaultdict(dict), Counter()
 transport_edges = defaultdict(lambda: {'count': 0, 'channels': set(), 'conn': set()})
+network_paths = defaultdict(lambda: {'count': 0, 'channels': set(), 'conn': set(), 'speed': 0})
 collectives = defaultdict(lambda: {'ranks': set(), 'payload': 0, 'traffic': 0, 'first': [], 'last': []})
 transfers = defaultdict(lambda: {'bytes': 0, 'ops': 0, 'first': None, 'last': None, 'peers': set()})
 peer_transfers = defaultdict(lambda: {'bytes': 0, 'ops': 0, 'steps': set()})
@@ -25,15 +25,21 @@ for path in sys.argv[1:]:
                 w = work_windows[(int(rank), int(ch))]
                 if kind == 'START': w['first'] = int(host) if w['first'] is None else min(w['first'], int(host))
                 else: w['last'] = int(host) if w['last'] is None else max(w['last'], int(host))
-            m = trans.search(line)
-            if m: transports[m.group(1)] += 1
             m = re.search(r"TRANSPORT rank=(\d+) peer=(\d+) ch=(\d+) conn=(\d+)(?: direction=(SEND|RECV))? type=(\w+) path=(\w+) path_type=(\d+)", line)
             if m:
                 rank, peer, ch, conn, direction, typ, path, path_type = m.groups()
                 direction = direction or 'UNKNOWN'
+                transports[typ] += 1
                 if typ != 'P2P': path = typ
                 edge = transport_edges[(int(rank), int(peer), direction, typ, path)]
                 edge['count'] += 1; edge['channels'].add(int(ch)); edge['conn'].add(int(conn))
+            m = re.search(r"NET_PATH rank=(\d+) peer=(\d+) ch=(\d+) conn=(\d+) direction=(SEND|RECV) backend=(\w+) net_dev=(\d+) net_id=(0x[0-9a-fA-F]+) guid=(0x[0-9a-fA-F]+) port=(-?\d+) speed_mbps=(-?\d+) rail=(-?\d+) plane=(-?\d+) proxy_rank=(\d+) pxn=(\d+) gdr=(\w+) gpu_nic_path=(\w+) path_type=(\d+) shared=(\d+) same_device=(\d+)", line)
+            if m:
+                rank, peer, ch, conn, direction, backend, net_dev, net_id, guid, port, speed, rail, plane, proxy_rank, pxn, gdr, gpu_nic_path, path_type, shared, same_device = m.groups()
+                key = (int(rank), int(peer), direction, backend, int(net_dev), net_id, guid,
+                       int(port), int(rail), int(plane), int(proxy_rank), int(pxn), gdr,
+                       gpu_nic_path, int(path_type), int(shared), int(same_device))
+                path = network_paths[key]; path['count'] += 1; path['channels'].add(int(ch)); path['conn'].add(int(conn)); path['speed'] = int(speed)
             m = re.search(r"TRANSFER op=(\d+) rank=(\d+) ch=(\d+) peer=(\d+) transport=(\d+) step=(\d+) bytes=(\d+)", line)
             if m:
                 op, rank, ch, peer, transport, step, bytes_ = map(int, m.groups())
@@ -80,6 +86,12 @@ if transport_edges:
     for (rank, peer, direction, typ, path), edge in sorted(transport_edges.items()):
         route = f'{rank}->{peer}' if direction == 'SEND' else f'{peer}->{rank}' if direction == 'RECV' else f'{rank}<->{peer}'
         print(f'  route={route} local_rank={rank} peer={peer} direction={direction} transport={typ} path={path} connections={edge["count"]} channels={sorted(edge["channels"])} conn_indices={sorted(edge["conn"])}')
+if network_paths:
+    print('network_paths=')
+    for key, item in sorted(network_paths.items()):
+        rank, peer, direction, backend, net_dev, net_id, guid, port, rail, plane, proxy_rank, pxn, gdr, gpu_nic_path, path_type, shared, same_device = key
+        route = f'{rank}->{peer}' if direction == 'SEND' else f'{peer}->{rank}'
+        print(f'  route={route} local_rank={rank} peer={peer} direction={direction} backend={backend} net_dev={net_dev} net_id={net_id} guid={guid} port={port} speed_mbps={item["speed"]} rail={rail} plane={plane} proxy_rank={proxy_rank} pxn={pxn} gdr={gdr} gpu_nic_path={gpu_nic_path} path_type={path_type} shared={shared} same_device={same_device} connections={item["count"]} channels={sorted(item["channels"])} conn_indices={sorted(item["conn"])}')
 if peer_transfers:
     print('peer_transfers=')
     for (rank, ch, peer, transport), item in sorted(peer_transfers.items()):

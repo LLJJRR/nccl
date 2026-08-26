@@ -157,6 +157,31 @@ void dump() {
               (unsigned long long)e.value, (unsigned long long)e.payloadBytes,
               (unsigned long long)e.trafficBytes);
       break;
+    case NCCL_TELEM_NET_PATH: {
+      uint32_t gdrMode = e.reserved & 0x3;
+      uint32_t backend = (e.reserved >> 5) & 0x7;
+      int port = int(int16_t((e.reserved >> 8) & 0xffff));
+      int speed = int(int32_t(uint32_t(e.value)));
+      int railId = int(int16_t((e.value >> 32) & 0xffff));
+      int planeId = int(int16_t((e.value >> 48) & 0xffff));
+      uint32_t pathType = (e.reserved >> 24) & 0xff;
+      fprintf(text, "[%llu ns] NET_PATH rank=%u peer=%llu ch=%u conn=%u direction=%s backend=%s net_dev=%u net_id=0x%llx guid=0x%llx port=%d speed_mbps=%d rail=%d plane=%d proxy_rank=%llu pxn=%u gdr=%s gpu_nic_path=%s path_type=%u shared=%u same_device=%u\n",
+              (unsigned long long)e.timestampNs, e.rank, (unsigned long long)e.payloadBytes,
+              e.channel, e.protocol,
+              e.collective == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
+              e.collective == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
+              backend == NCCL_TELEM_NET_BACKEND_SOCKET ? "SOCKET" :
+              backend == NCCL_TELEM_NET_BACKEND_IB ? "IB" :
+              backend == NCCL_TELEM_NET_BACKEND_PLUGIN ? "PLUGIN" : "UNKNOWN",
+              e.algorithm, (unsigned long long)e.collectiveId, (unsigned long long)e.planId,
+              port, speed, railId, planeId,
+              (unsigned long long)e.trafficBytes, (e.reserved >> 4) & 0x1,
+              gdrMode == 0 ? "DISABLED" : gdrMode == 1 ? "DEFAULT" :
+              gdrMode == 2 ? "PCI" : "UNKNOWN",
+              pathType < PATH_DIS + 1 ? topoPathTypeStr[pathType] : "UNKNOWN", pathType,
+              (e.reserved >> 2) & 0x1, (e.reserved >> 3) & 0x1);
+      break;
+    }
     default:
       fprintf(text, "[%llu ns] EVENT type=%u\n", (unsigned long long)e.timestampNs, e.eventType);
       break;
@@ -318,4 +343,22 @@ void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex
                                   int direction, int pathType) {
   record(NCCL_TELEM_TRANSPORT_CONNECT, 0, 0, rank, channel, direction, transport, connIndex,
          0, 0, uint64_t(uint32_t(peer)), uint32_t(pathType));
+}
+
+void ncclTelemetryRecordNetPath(int rank, int peer, int channel, int connIndex, int direction,
+                                int backend, int netDev, int64_t netId, int proxyRank, int gdrMode,
+                                int pathType, bool shared, bool sameDevice, uint64_t guid, int port,
+                                int speed, int railId, int planeId) {
+  uint32_t flags = uint32_t(gdrMode) & 0x3;
+  flags |= uint32_t(shared) << 2;
+  flags |= uint32_t(sameDevice) << 3;
+  flags |= uint32_t(proxyRank != rank) << 4;
+  flags |= (uint32_t(backend) & 0x7) << 5;
+  flags |= uint32_t(uint16_t(port)) << 8;
+  flags |= (uint32_t(pathType) & 0xff) << 24;
+  uint64_t properties = uint64_t(uint32_t(speed));
+  properties |= uint64_t(uint16_t(railId)) << 32;
+  properties |= uint64_t(uint16_t(planeId)) << 48;
+  record(NCCL_TELEM_NET_PATH, uint64_t(netId), guid, rank, channel, direction, netDev,
+         connIndex, size_t(uint32_t(peer)), size_t(uint32_t(proxyRank)), properties, flags);
 }

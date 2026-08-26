@@ -8,6 +8,7 @@
 #include "comm.h"
 #include "net.h"
 #include "graph.h"
+#include "graph/topo.h"
 #include "proxy.h"
 #include "collectives.h"
 #include "gdrwrap.h"
@@ -19,9 +20,32 @@
 #include "shm.h"
 #include "compiler.h"
 #include <assert.h>
+#include <string.h>
 #include "register_inline.h"
 
 static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too large");
+
+static int telemetryNetBackend(const char* name) {
+  if (name == NULL) return NCCL_TELEM_NET_BACKEND_UNKNOWN;
+  if (strstr(name, "Socket") != NULL) return NCCL_TELEM_NET_BACKEND_SOCKET;
+  if (strstr(name, "IB") != NULL) return NCCL_TELEM_NET_BACKEND_IB;
+  return NCCL_TELEM_NET_BACKEND_PLUGIN;
+}
+
+static int telemetryGpuNetPathType(struct ncclComm* comm, int rank, int64_t netId) {
+  if (comm->topo == NULL) return PATH_DIS;
+  int gpuIndex = -1;
+  if (ncclTopoRankToIndex(comm->topo, rank, &gpuIndex, false) != ncclSuccess) return PATH_DIS;
+  int netIndex = -1;
+  for (int n = 0; n < comm->topo->nodes[NET].count; n++) {
+    if (comm->topo->nodes[NET].nodes[n].id == netId) {
+      netIndex = n;
+      break;
+    }
+  }
+  if (netIndex == -1 || comm->topo->nodes[GPU].nodes[gpuIndex].paths[NET] == NULL) return PATH_DIS;
+  return comm->topo->nodes[GPU].nodes[gpuIndex].paths[NET][netIndex].type;
+}
 
 #define NCCL_NET_MAP_HOSTMEM 0
 #define NCCL_NET_MAP_DEVMEM 1
@@ -318,6 +342,16 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   req.sameDevice = (comm->peerInfo[proxyRank].cudaDev == comm->cudaDev);
   NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), NULL, 0));
 
+  if (ncclTelemetryLevel() >= NCCL_TELEM_BASIC) {
+    ncclNetProperties_t netProps;
+    NCCLCHECK(comm->ncclNet->getProperties(req.netDev, &netProps));
+    ncclTelemetryRecordNetPath(myInfo->rank, peerInfo->rank, channelId, connIndex,
+      NCCL_TELEM_DIRECTION_SEND, telemetryNetBackend(comm->ncclNet->name), req.netDev, netId,
+      proxyRank, req.useGdr, telemetryGpuNetPathType(comm, myInfo->rank, netId), req.shared,
+      req.sameDevice, netProps.guid, netProps.port, netProps.speed, netProps.railId,
+      netProps.planeId);
+  }
+
   if (proxyRank == myInfo->rank) {
     INFO(NCCL_INIT|NCCL_NET,"Channel %02d/%d : %d[%d] -> %d[%d] [send] via NET/%s/%d%s%s%s", channelId, connIndex, myInfo->rank, myInfo->nvmlDev, peerInfo->rank, peerInfo->nvmlDev, comm->ncclNet->name, req.netDev,
         req.useGdr ? "/GDRDMA" : "", req.useGdr==ncclTopoGdrModePci ? "(PCI)" : "",
@@ -365,6 +399,16 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   req.tpRemoteRank = comm->topParentRanks[peerInfo->rank];
   req.sameDevice = (comm->peerInfo[proxyRank].cudaDev == comm->cudaDev);
   NCCLCHECK(ncclProxyCallBlocking(comm, &recv->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), connectInfo, sizeof(ncclNetHandle_t)));
+
+  if (ncclTelemetryLevel() >= NCCL_TELEM_BASIC) {
+    ncclNetProperties_t netProps;
+    NCCLCHECK(comm->ncclNet->getProperties(req.netDev, &netProps));
+    ncclTelemetryRecordNetPath(myInfo->rank, peerInfo->rank, channelId, connIndex,
+      NCCL_TELEM_DIRECTION_RECV, telemetryNetBackend(comm->ncclNet->name), req.netDev, netId,
+      myInfo->rank, req.useGdr, telemetryGpuNetPathType(comm, myInfo->rank, netId), req.shared,
+      req.sameDevice, netProps.guid, netProps.port, netProps.speed, netProps.railId,
+      netProps.planeId);
+  }
   memcpy((uint8_t*)connectInfo + sizeof(ncclNetHandle_t), &req.useGdr, sizeof(int));
   INFO(NCCL_INIT|NCCL_NET,"Channel %02d/%d : %d[%d] -> %d[%d] [receive] via NET/%s/%d%s%s%s", channelId, connIndex, peerInfo->rank, peerInfo->nvmlDev, myInfo->rank, myInfo->nvmlDev, comm->ncclNet->name, req.netDev,
       req.useGdr ? "/GDRDMA" : "", req.useGdr==ncclTopoGdrModePci ? "(PCI)" : "",
