@@ -111,4 +111,4 @@ if collectives:
     print('collective_summary=')
     for (cid, typ), c in sorted(collectives.items()):
         print(f'  id={cid} type={typ} ranks={len(c["ranks"])} payload={c["payload"]} traffic={c["traffic"]}')
-if not rows: print('diagnostic=no_matched_gpu_work_pairs')
+if not rows and not summaries: print('diagnostic=no_matched_gpu_work_pairs')
