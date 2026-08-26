@@ -220,7 +220,8 @@ void recordBatch(const ncclTelemetryEvent* input, size_t count) {
   if (!ncclParamTelemetryEnable() || count == 0) return;
   ensureInitialized();
   uint64_t base = buffer.next.fetch_add(count, std::memory_order_relaxed);
-  if (base >= kCapacity) buffer.dropped.fetch_add(count, std::memory_order_relaxed);
+  uint64_t overwritten = base >= kCapacity ? count : (base + count > kCapacity ? base + count - kCapacity : 0);
+  if (overwritten != 0) buffer.dropped.fetch_add(overwritten, std::memory_order_relaxed);
   for (size_t i = 0; i < count; ++i) buffer.events[(base + i) % kCapacity] = input[i];
 }
 
@@ -277,8 +278,15 @@ void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collecti
                                    size_t payloadBytes, size_t trafficBytes) {
   {
     std::lock_guard<std::mutex> lock(stateMutex);
+    for (auto it = channelPlans.begin(); it != channelPlans.end();) {
+      if (it->rank == uint32_t(rank) && it->collectiveId != collectiveId)
+        it = channelPlans.erase(it);
+      else
+        ++it;
+    }
     for (auto& item : channelStates) {
-      if (item.second.collectiveId != 0 && item.second.collectiveId != collectiveId)
+      if (item.second.collectiveId != 0 && item.second.collectiveId != collectiveId &&
+          uint32_t(item.first >> 32) == uint32_t(rank))
         flushChannelState(item.first, item.second);
     }
   }
@@ -294,9 +302,7 @@ void ncclTelemetryRecordChannel(uint64_t collectiveId, uint64_t planId, int rank
   if (!channelPlans.insert(dedupe).second) return;
   uint64_t key = channelKey(rank, channel);
   ChannelState& state = channelStates[key];
-  if (state.collectiveId != 0 && (state.collectiveId != collectiveId || state.planId != planId)) {
-    channelPlans.erase(ChannelPlanKey{state.collectiveId, state.planId, uint32_t(rank),
-                                     uint16_t(channel < 0 ? 0xffff : channel)});
+  if (state.collectiveId != 0 && state.collectiveId != collectiveId) {
     flushChannelState(key, state);
   }
   state.collectiveId = collectiveId;
