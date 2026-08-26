@@ -37,15 +37,11 @@ std::atomic<uint64_t> collectiveIds{0};
 std::mutex stateMutex;
 
 struct ChannelState {
-  uint64_t collectiveId = 0;
-  uint64_t planId = 0;
-  uint64_t bytesPerWork = 0;
+  uint64_t totalBytes = 0;
   uint64_t workCount = 0;
   uint64_t firstStart = 0;
   uint64_t lastEnd = 0;
 };
-std::unordered_map<uint64_t, ChannelState> channelStates;
-std::unordered_map<uint64_t, uint64_t> workStarts;
 struct ChannelPlanKey {
   uint64_t collectiveId;
   uint64_t planId;
@@ -65,33 +61,56 @@ struct ChannelPlanKeyHash {
   }
 };
 std::unordered_set<ChannelPlanKey, ChannelPlanKeyHash> channelPlans;
+std::unordered_map<ChannelPlanKey, ChannelState, ChannelPlanKeyHash> channelStates;
 
-void flushChannelState(uint64_t key, ChannelState& state);
+struct WorkKey {
+  uint64_t counter;
+  uint32_t rank;
+  uint16_t channel;
+  bool operator==(const WorkKey& other) const {
+    return counter == other.counter && rank == other.rank && channel == other.channel;
+  }
+};
+struct WorkKeyHash {
+  size_t operator()(const WorkKey& key) const {
+    size_t h = std::hash<uint64_t>{}(key.counter);
+    h ^= std::hash<uint32_t>{}(key.rank) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    return h ^ (size_t(key.channel) * 0x9e3779b9);
+  }
+};
+struct WorkState {
+  ChannelPlanKey channel;
+  uint64_t bytes;
+  uint64_t start;
+};
+std::unordered_map<WorkKey, WorkState, WorkKeyHash> workStates;
+std::vector<ncclTelemetryEvent> pendingSummaries;
+
 uint64_t nowNs();
 void recordBatch(const ncclTelemetryEvent* input, size_t count);
 
-void appendChannelSummary(std::vector<ncclTelemetryEvent>& events, uint64_t key,
+void appendChannelSummary(std::vector<ncclTelemetryEvent>& events, const ChannelPlanKey& key,
                           ChannelState& state) {
-  if (state.workCount == 0 || state.collectiveId == 0) return;
+  if (state.workCount == 0) return;
   ncclTelemetryEvent e{};
   e.timestampNs = nowNs();
-  e.collectiveId = state.collectiveId;
-  e.planId = state.planId;
-  e.rank = uint32_t(key >> 32);
-  e.channel = uint16_t(uint32_t(key));
+  e.collectiveId = key.collectiveId;
+  e.planId = key.planId;
+  e.rank = key.rank;
+  e.channel = key.channel;
   e.eventType = NCCL_TELEM_CHANNEL_SUMMARY;
-  e.payloadBytes = state.bytesPerWork * state.workCount;
+  e.payloadBytes = state.totalBytes;
   e.trafficBytes = state.lastEnd >= state.firstStart ? state.lastEnd - state.firstStart : 0;
   e.value = state.workCount;
   events.push_back(e);
-  state.workCount = state.firstStart = state.lastEnd = 0;
 }
 
 void flushChannelStatesLocked() {
-  std::vector<ncclTelemetryEvent> events;
-  events.reserve(channelStates.size());
-  for (auto& item : channelStates) appendChannelSummary(events, item.first, item.second);
-  recordBatch(events.data(), events.size());
+  pendingSummaries.reserve(pendingSummaries.size() + channelStates.size());
+  for (auto& item : channelStates) appendChannelSummary(pendingSummaries, item.first, item.second);
+  channelStates.clear();
+  recordBatch(pendingSummaries.data(), pendingSummaries.size());
+  pendingSummaries.clear();
 }
 
 uint64_t nowNs() {
@@ -246,20 +265,6 @@ void record(uint16_t type, uint64_t collectiveId, uint64_t planId, int rank, int
   recordBatch(&e, 1);
 }
 
-uint64_t channelKey(int rank, int channel) {
-  return (uint64_t(uint32_t(rank)) << 32) | uint32_t(channel < 0 ? 0xffff : channel);
-}
-
-uint64_t workKey(int rank, int channel, uint64_t counter) {
-  return (channelKey(rank, channel) * 0x9e3779b97f4a7c15ull) ^ counter;
-}
-
-void flushChannelState(uint64_t key, ChannelState& state) {
-  std::vector<ncclTelemetryEvent> events;
-  events.reserve(1);
-  appendChannelSummary(events, key, state);
-  recordBatch(events.data(), events.size());
-}
 }
 
 void ncclTelemetryFlush() {
@@ -284,11 +289,6 @@ void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collecti
       else
         ++it;
     }
-    for (auto& item : channelStates) {
-      if (item.second.collectiveId != 0 && item.second.collectiveId != collectiveId &&
-          uint32_t(item.first >> 32) == uint32_t(rank))
-        flushChannelState(item.first, item.second);
-    }
   }
   record(NCCL_TELEM_COLLECTIVE_ENQUEUE, collectiveId, 0, rank, -1, collective, 0, 0,
          payloadBytes, trafficBytes, 0);
@@ -296,18 +296,14 @@ void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collecti
 
 void ncclTelemetryRecordChannel(uint64_t collectiveId, uint64_t planId, int rank,
                                 int channel, int collective, int algorithm, int protocol,
-                                size_t payloadBytes, size_t trafficBytes) {
+                                size_t payloadBytes, size_t trafficBytes, uint64_t workCounter) {
   std::lock_guard<std::mutex> lock(stateMutex);
   ChannelPlanKey dedupe{collectiveId, planId, uint32_t(rank), uint16_t(channel < 0 ? 0xffff : channel)};
   if (!channelPlans.insert(dedupe).second) return;
-  uint64_t key = channelKey(rank, channel);
-  ChannelState& state = channelStates[key];
-  if (state.collectiveId != 0 && state.collectiveId != collectiveId) {
-    flushChannelState(key, state);
+  if (ncclTelemetryLevel() == NCCL_TELEM_EXECUTION && workCounter != 0) {
+    WorkKey work{workCounter, uint32_t(rank), uint16_t(channel)};
+    workStates[work] = WorkState{dedupe, uint64_t(payloadBytes), 0};
   }
-  state.collectiveId = collectiveId;
-  state.planId = planId;
-  state.bytesPerWork = payloadBytes;
   record(NCCL_TELEM_CHANNEL_PLAN, collectiveId, planId, rank, channel, collective, algorithm,
          protocol, payloadBytes, trafficBytes, 0);
 }
@@ -333,18 +329,26 @@ void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t t
     return;
   }
   std::lock_guard<std::mutex> lock(stateMutex);
-  uint64_t key = channelKey(rank, channel);
+  WorkKey key{counter, uint32_t(rank), uint16_t(channel)};
+  auto work = workStates.find(key);
+  if (work == workStates.end()) return;
   if (!end) {
-    workStarts[workKey(rank, channel, counter)] = timestamp;
+    work->second.start = timestamp;
     return;
   }
-  auto start = workStarts.find(workKey(rank, channel, counter));
-  if (start == workStarts.end()) return;
-  ChannelState& state = channelStates[key];
-  if (state.firstStart == 0) state.firstStart = start->second;
+  if (work->second.start == 0) return;
+  ChannelState& state = channelStates[work->second.channel];
+  if (state.firstStart == 0) state.firstStart = work->second.start;
   state.lastEnd = std::max(state.lastEnd, timestamp);
+  state.totalBytes += work->second.bytes;
   state.workCount++;
-  workStarts.erase(start);
+  appendChannelSummary(pendingSummaries, work->second.channel, state);
+  channelStates.erase(work->second.channel);
+  workStates.erase(work);
+  if (pendingSummaries.size() >= 32) {
+    recordBatch(pendingSummaries.data(), pendingSummaries.size());
+    pendingSummaries.clear();
+  }
 }
 
 void ncclTelemetryRecordWorkSnapshot(int rank, int channel, uint64_t counter, uint64_t value) {

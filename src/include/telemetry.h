@@ -53,7 +53,7 @@ void ncclTelemetryFlush();
 int ncclTelemetryLevel();
 void ncclTelemetryRecordChannel(uint64_t collectiveId, uint64_t planId, int rank,
                                 int channel, int collective, int algorithm, int protocol,
-                                size_t payloadBytes, size_t trafficBytes);
+                                size_t payloadBytes, size_t trafficBytes, uint64_t workCounter);
 void ncclTelemetryRecordPlan(uint64_t planId, int rank, uint64_t channelMask, int nCollectives);
 void ncclTelemetryRecordProxy(uint64_t planId, int rank, int channel, int pattern,
                               size_t bytes, uint64_t opCount);

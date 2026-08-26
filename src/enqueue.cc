@@ -802,7 +802,8 @@ static ncclResult_t scheduleCollTasksToPlan(
         task->telemetryId,
         uint64_t(reinterpret_cast<uintptr_t>(plan)), comm->rank, c, task->func,
         task->algorithm, task->protocol, channelBytes,
-        channelBytes * (task->isCollnet ? 1 : telemetryTrafficPerByte));
+        channelBytes * (task->isCollnet ? 1 : telemetryTrafficPerByte),
+        comm->profiler.workCounter[c]);
       ncclTelemetryRecordRingEdge(comm->rank, c, comm->channels[c].ring.prev,
                                   comm->channels[c].ring.next);
     }
@@ -1818,30 +1819,8 @@ ncclResult_t ncclLaunchKernelAfter_NoCuda(struct ncclComm* comm, struct ncclKern
 }
 
 void ncclTelemetryCaptureCompletedWork(struct ncclComm* comm) {
-    if (ncclTelemetryLevel() < NCCL_TELEM_EXECUTION || comm->profiler.workStarted == nullptr) return;
-    for (int c = 0; c < comm->nChannels; c++) {
-      uint64_t counter = comm->profiler.workCounter[c];
-      if (counter == 0) continue;
-      uint64_t first = std::min(comm->profiler.telemetryStartCaptured[c], comm->profiler.telemetryEndCaptured[c]) + 1;
-      if (counter - first >= MAX_PROFILER_EVENTS_PER_CHANNEL) first = counter - MAX_PROFILER_EVENTS_PER_CHANNEL + 1;
-      uint64_t latestCompleted = 0;
-      for (uint64_t wc = first; wc <= counter; wc++) {
-        int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
-        auto start = comm->profiler.workStarted[c].data[slot];
-        auto end = comm->profiler.workCompleted[c].data[slot];
-        if (end.counter > latestCompleted) latestCompleted = end.counter;
-        if (start.counter == wc && wc > comm->profiler.telemetryStartCaptured[c]) {
-          ncclTelemetryRecordWork(comm->rank, c, wc, start.timestamp, false);
-          comm->profiler.telemetryStartCaptured[c] = wc;
-        }
-        if (end.counter == wc && wc > comm->profiler.telemetryEndCaptured[c]) {
-          ncclTelemetryRecordWork(comm->rank, c, wc, end.timestamp, true);
-          comm->profiler.telemetryEndCaptured[c] = wc;
-        }
-      }
-      if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC && latestCompleted != 0)
-        ncclTelemetryRecordWorkSnapshot(comm->rank, c, counter, latestCompleted);
-    }
+  // Profiler proxy progress records work start/end as they become visible.
+  (void)comm;
 }
 
 namespace {
@@ -1874,8 +1853,7 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
     cudaEvent_t finishedEvent = comm->sharedRes->scratchEvent;
     CUDACHECK(cudaEventRecord(finishedEvent, launchStream));
 
-    if (ncclTelemetryLevel() >= NCCL_TELEM_EXECUTION ||
-        comm->workFifoProduced - comm->workFifoProducedLastRecorded > comm->workFifoBytes/8) {
+    if (comm->workFifoProduced - comm->workFifoProducedLastRecorded > comm->workFifoBytes/8) {
       comm->workFifoProducedLastRecorded = comm->workFifoProduced;
       struct KernelFinishCallback* cb;
       NCCLCHECK(ncclCalloc(&cb, 1));

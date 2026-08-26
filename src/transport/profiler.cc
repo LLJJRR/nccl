@@ -35,11 +35,15 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
       struct ncclDevProfiler* workStarted = (struct ncclDevProfiler *)sub->sendbuff;
       struct ncclDevProfiler* workCompleted = (struct ncclDevProfiler *)sub->recvbuff;
       if (sub->posted < sub->nsteps && sub->base <= workStarted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter) {
+        ncclTelemetryRecordWork(proxyState->comm->rank, sub->channelId, sub->base,
+                                workStarted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp, false);
         ncclProfilerStartKernelChEvent(args, s, workStarted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
         sub->posted = sub->nsteps;
         continue; // allow events on every channel to start
       }
       if (sub->transmitted < sub->nsteps && sub->base <= workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter) {
+        ncclTelemetryRecordWork(proxyState->comm->rank, sub->channelId, sub->base,
+                                workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp, true);
         if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC)
           ncclTelemetryRecordWorkSnapshot(proxyState->comm->rank, sub->channelId, sub->base,
             workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter);
