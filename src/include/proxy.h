@@ -119,6 +119,9 @@ struct ncclProxyOp {
   ncclPid_t pid;
   void* profilerContext;
   uint64_t workCounter;
+  uint64_t telemetryCollectiveId;
+  uint64_t telemetryPlanId;
+  uint64_t telemetryBytes;
 
   struct ncclProxyOp *enqNext;
 };
@@ -170,6 +173,10 @@ struct ncclProxySubArgs {
   struct ncclProxyEventHandle pHandles[NCCL_STEPS];
   size_t transSize;
   uint64_t workCounter;
+  uint64_t telemetryCollectiveId;
+  uint64_t telemetryPlanId;
+  uint64_t telemetryBytes;
+  uint64_t telemetryStart;
 
   void* recvRequestsCache[NCCL_STEPS];
   int recvRequestsSubCount;

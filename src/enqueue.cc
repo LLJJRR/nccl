@@ -567,6 +567,10 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
 }
 
 static ncclResult_t addProfilerProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclProxyOp* op) {
+  bool collective = op->coll != ncclFuncSend && op->coll != ncclFuncRecv;
+  op->telemetryCollectiveId = collective ? op->task.coll->telemetryId : 0;
+  op->telemetryPlanId = uint64_t(reinterpret_cast<uintptr_t>(plan));
+  op->telemetryBytes = op->channelSize;
   int tmp = op->pattern;
   op->pattern = ncclPatternProfiler;
   ncclResult_t ret = ncclAddProxyOpIfNeeded(comm, plan, op);
@@ -802,8 +806,7 @@ static ncclResult_t scheduleCollTasksToPlan(
         task->telemetryId,
         uint64_t(reinterpret_cast<uintptr_t>(plan)), comm->rank, c, task->func,
         task->algorithm, task->protocol, channelBytes,
-        channelBytes * (task->isCollnet ? 1 : telemetryTrafficPerByte),
-        comm->profiler.workCounter[c]);
+        channelBytes * (task->isCollnet ? 1 : telemetryTrafficPerByte));
       ncclTelemetryRecordRingEdge(comm->rank, c, comm->channels[c].ring.prev,
                                   comm->channels[c].ring.next);
     }

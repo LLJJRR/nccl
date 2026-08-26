@@ -388,6 +388,10 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   sub->profilerContext = op->profilerContext;
   sub->ringAlgo = op->ringAlgo;
   sub->workCounter = op->workCounter;
+  sub->telemetryCollectiveId = op->telemetryCollectiveId;
+  sub->telemetryPlanId = op->telemetryPlanId;
+  sub->telemetryBytes = op->telemetryBytes;
+  sub->telemetryStart = 0;
   args->nsubs = subIndex+1;
   if (subIndex) {
     args->nChannels = std::min(args->nChannels, op->nChannels);
