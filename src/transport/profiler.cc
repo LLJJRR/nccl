@@ -46,7 +46,7 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
         uint64_t telemetryEnd = workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp;
         ncclTelemetryRecordWork(proxyState->comm->rank, sub->channelId, sub->base,
                                 telemetryEnd, true);
-        if (ncclTelemetryLevel() == NCCL_TELEM_EXECUTION && sub->telemetryCollectiveId != 0) {
+        if (ncclTelemetryLevel() == NCCL_TELEM_EXECUTION && sub->telemetryCollectiveId != UINT64_MAX) {
           uint64_t duration = telemetryEnd >= sub->telemetryStart ? telemetryEnd - sub->telemetryStart : 0;
           ncclTelemetryRecordChannelSummary(sub->telemetryCollectiveId, sub->telemetryPlanId,
                                             proxyState->comm->rank, sub->channelId, 1,
