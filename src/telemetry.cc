@@ -110,9 +110,11 @@ void dump() {
               e.algorithm, (unsigned long long)e.payloadBytes, (unsigned long long)e.value);
       break;
     case NCCL_TELEM_TRANSPORT_CONNECT:
-      fprintf(text, "[%llu ns] TRANSPORT rank=%u peer=%llu ch=%u conn=%u type=%s path=%s path_type=%u\n",
+      fprintf(text, "[%llu ns] TRANSPORT rank=%u peer=%llu ch=%u conn=%u direction=%s type=%s path=%s path_type=%u\n",
               (unsigned long long)e.timestampNs, e.rank, (unsigned long long)e.value, e.channel,
-              e.protocol, e.algorithm == 0 ? "P2P" : e.algorithm == 1 ? "SHM" :
+              e.protocol, e.collective == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
+              e.collective == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
+              e.algorithm == 0 ? "P2P" : e.algorithm == 1 ? "SHM" :
               e.algorithm == 2 ? "NET" : e.algorithm == 3 ? "COLLNET" : "UNKNOWN",
               e.algorithm == 0 && e.reserved < PATH_DIS + 1 ? topoPathTypeStr[e.reserved] :
               e.algorithm == 1 ? "SHM" : e.algorithm == 2 ? "NET" :
@@ -313,7 +315,7 @@ void ncclTelemetryRecordChannelSummaries(const ncclTelemetryChannelSummary* summ
 }
 
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport,
-                                  int pathType) {
-  record(NCCL_TELEM_TRANSPORT_CONNECT, 0, 0, rank, channel, 0, transport, connIndex,
+                                  int direction, int pathType) {
+  record(NCCL_TELEM_TRANSPORT_CONNECT, 0, 0, rank, channel, direction, transport, connIndex,
          0, 0, uint64_t(uint32_t(peer)), uint32_t(pathType));
 }

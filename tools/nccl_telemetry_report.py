@@ -27,11 +27,12 @@ for path in sys.argv[1:]:
                 else: w['last'] = int(host) if w['last'] is None else max(w['last'], int(host))
             m = trans.search(line)
             if m: transports[m.group(1)] += 1
-            m = re.search(r"TRANSPORT rank=(\d+) peer=(\d+) ch=(\d+) conn=(\d+) type=(\w+) path=(\w+) path_type=(\d+)", line)
+            m = re.search(r"TRANSPORT rank=(\d+) peer=(\d+) ch=(\d+) conn=(\d+)(?: direction=(SEND|RECV))? type=(\w+) path=(\w+) path_type=(\d+)", line)
             if m:
-                rank, peer, ch, conn, typ, path, path_type = m.groups()
+                rank, peer, ch, conn, direction, typ, path, path_type = m.groups()
+                direction = direction or 'UNKNOWN'
                 if typ != 'P2P': path = typ
-                edge = transport_edges[(int(rank), int(peer), typ, path)]
+                edge = transport_edges[(int(rank), int(peer), direction, typ, path)]
                 edge['count'] += 1; edge['channels'].add(int(ch)); edge['conn'].add(int(conn))
             m = re.search(r"TRANSFER op=(\d+) rank=(\d+) ch=(\d+) peer=(\d+) transport=(\d+) step=(\d+) bytes=(\d+)", line)
             if m:
@@ -76,8 +77,9 @@ if transports:
     print('transports=' + ', '.join(f'{k}:{v}' for k,v in sorted(transports.items())))
 if transport_edges:
     print('transport_edges=')
-    for (rank, peer, typ, path), edge in sorted(transport_edges.items()):
-        print(f'  {rank}->{peer} transport={typ} path={path} connections={edge["count"]} channels={sorted(edge["channels"])} conn_indices={sorted(edge["conn"])}')
+    for (rank, peer, direction, typ, path), edge in sorted(transport_edges.items()):
+        route = f'{rank}->{peer}' if direction == 'SEND' else f'{peer}->{rank}' if direction == 'RECV' else f'{rank}<->{peer}'
+        print(f'  route={route} local_rank={rank} peer={peer} direction={direction} transport={typ} path={path} connections={edge["count"]} channels={sorted(edge["channels"])} conn_indices={sorted(edge["conn"])}')
 if peer_transfers:
     print('peer_transfers=')
     for (rank, ch, peer, transport), item in sorted(peer_transfers.items()):

@@ -30,6 +30,11 @@ enum ncclTelemetryLevel : uint8_t {
   NCCL_TELEM_DIAGNOSTIC = 2
 };
 
+enum ncclTelemetryDirection : uint8_t {
+  NCCL_TELEM_DIRECTION_RECV = 0,
+  NCCL_TELEM_DIRECTION_SEND = 1
+};
+
 struct ncclTelemetryEvent {
   uint64_t timestampNs;
   uint64_t collectiveId;
@@ -68,7 +73,7 @@ void ncclTelemetryRecordPlan(uint64_t planId, int rank, uint64_t channelMask, in
 void ncclTelemetryRecordProxy(uint64_t planId, int rank, int channel, int pattern,
                               size_t bytes, uint64_t opCount);
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport,
-                                  int pathType);
+                                  int direction, int pathType);
 void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next);
 void ncclTelemetryRecordWork(int rank, int channel, uint64_t counter, uint64_t timestamp, bool end);
 void ncclTelemetryRecordWorkSnapshot(int rank, int channel, uint64_t counter, uint64_t value);

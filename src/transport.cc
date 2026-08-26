@@ -45,7 +45,7 @@ static ncclResult_t selectTransport(struct ncclComm* comm, struct ncclTopoGraph*
         struct ncclTopoLinkList* paths = comm->topo->nodes[GPU].nodes[srcIndex].paths[GPU];
         if (paths != nullptr) pathType = paths[dstIndex].type;
       }
-      ncclTelemetryRecordTransport(comm->rank, channelId, peer, connIndex, t, pathType);
+      ncclTelemetryRecordTransport(comm->rank, channelId, peer, connIndex, t, type, pathType);
       return ncclSuccess;
     }
   }

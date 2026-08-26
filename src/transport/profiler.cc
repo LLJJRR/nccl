@@ -58,10 +58,13 @@ static ncclResult_t profilerProxyProgress(struct ncclProxyState* proxyState, str
           ncclTelemetryRecordWorkSnapshot(proxyState->comm->rank, sub->channelId, sub->base,
             workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].counter);
         ncclProfilerStopKernelChEvent(args, s, workCompleted[sub->channelId].data[sub->base%MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp);
-        // The profiler proxy observes every completed channel work, including direct P2P.
-        // Use the operation byte count as the authoritative channel transfer amount.
+        // The profiler proxy emits one aggregate transfer for the completed channel work.
+        // Collective sub->nbytes can describe only one protocol step, while telemetryBytes
+        // carries the complete channel work size from the planner.
+        size_t transferBytes = sub->telemetryCollectiveId != UINT64_MAX && sub->telemetryBytes > 0 ?
+          size_t(sub->telemetryBytes) : (sub->nbytes > 0 ? size_t(sub->nbytes) : 0);
         ncclTelemetryRecordTransfer(args->opCount, proxyState->comm->rank, sub->channelId,
-                                    sub->peer, 0, sub->base, sub->nbytes > 0 ? size_t(sub->nbytes) : 0);
+                                    sub->peer, 0, sub->base, transferBytes);
         sub->transmitted = sub->nsteps;
         args->done++;
       }
