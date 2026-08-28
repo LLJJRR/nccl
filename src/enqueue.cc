@@ -109,11 +109,16 @@ ncclResult_t ncclAddProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan
   op->telemetryCollectiveId = collective ? op->task.coll->telemetryId : UINT64_MAX;
   op->telemetryPlanId = uint64_t(reinterpret_cast<uintptr_t>(plan));
   op->telemetryBytes = op->channelSize;
+  op->telemetryProxyId = ncclTelemetryNextProxyId();
   ncclTelemetryRecordProxy(uint64_t(reinterpret_cast<uintptr_t>(plan)), comm->rank,
                            op->channelId, op->pattern, op->channelSize, op->opCount);
   bool needed = true;
   NCCLCHECK(ncclProxySaveOp(comm, op, &needed));
   if (needed) {
+    ncclTelemetryRecordProxyProgress(op->telemetryProxyId, op->telemetryCollectiveId,
+                                     op->telemetryPlanId, comm->rank, op->channelId, op->peer,
+                                     NCCL_TELEM_DIRECTION_UNKNOWN, 0, op->telemetryBytes, 0,
+                                     NCCL_TELEM_PROXY_ENQUEUE, 0);
     struct ncclProxyOp* q = ncclMemoryPoolAlloc<struct ncclProxyOp>(&comm->memPool_ncclProxyOp, &comm->memPermanent);
     *q = *op; // C++ struct assignment
     ncclIntruQueueEnqueue(&comm->planner.wipPlan.channels[op->channelId].proxyOpQueue, q);

@@ -6,6 +6,11 @@ if len(sys.argv) < 2:
     sys.exit(2)
 work = re.compile(r"\[(\d+) ns\] WORK_(START|END) coll=(\d+) plan=(\d+) rank=(\d+) ch=(\d+) counter=(\d+) gpu_timer=(\d+)")
 legacy_work = re.compile(r"\[(\d+) ns\] WORK_(START|END) rank=(\d+) ch=(\d+) counter=(\d+) gpu_timer=(\d+)")
+proxy_progress = re.compile(
+    r"\[(\d+) ns\] PROXY_PROGRESS id=(\d+) coll=(\d+) plan=(\d+) rank=(\d+) ch=(\d+) "
+    r"peer=(\d+) direction=(SEND|RECV|UNKNOWN) transport=(\d+) phase=(\d+) status=(\d+) "
+    r"expected_bytes=(\d+) progressed_bytes=(\d+)"
+)
 events, transports = defaultdict(dict), Counter()
 transport_edges = defaultdict(lambda: {'count': 0, 'channels': set(), 'conn': set()})
 network_paths = defaultdict(lambda: {'count': 0, 'channels': set(), 'conn': set(), 'speed': 0})
@@ -16,6 +21,7 @@ peer_transfers = defaultdict(lambda: {'bytes': 0, 'ops': 0, 'steps': set()})
 work_windows = defaultdict(lambda: {'first': None, 'last': None})
 summaries = []
 host_times = []
+proxy_events = defaultdict(list)
 for path in sys.argv[1:]:
     with open(path, errors="replace") as f:
         for line in f:
@@ -34,6 +40,16 @@ for path in sys.argv[1:]:
                 w = work_windows[(coll, plan, int(rank), int(ch))]
                 if kind == 'START': w['first'] = int(host) if w['first'] is None else min(w['first'], int(host))
                 else: w['last'] = int(host) if w['last'] is None else max(w['last'], int(host))
+            m = proxy_progress.search(line)
+            if m:
+                (ts, proxy_id, coll, plan, rank, ch, peer, direction, transport, phase,
+                 status, expected, progressed) = m.groups()
+                proxy_events[int(proxy_id)].append({
+                    'timestamp': int(ts), 'collective': int(coll), 'plan': int(plan),
+                    'rank': int(rank), 'channel': int(ch), 'peer': int(peer),
+                    'direction': direction, 'transport': int(transport), 'phase': int(phase),
+                    'status': int(status), 'expected': int(expected), 'progressed': int(progressed)
+                })
             m = re.search(r"TRANSPORT rank=(\d+) peer=(\d+) ch=(\d+) conn=(\d+)(?: direction=(SEND|RECV))? type=(\w+) path=(\w+) path_type=(\d+)", line)
             if m:
                 rank, peer, ch, conn, direction, typ, path, path_type = m.groups()
@@ -82,6 +98,35 @@ rows = [(k, v['END'][0]-v['START'][0], v['END'][1]-v['START'][1], v['START'][1],
         if 'START' in v and 'END' in v and v['END'][0] >= v['START'][0]]
 print('NCCL Telemetry Report')
 print(f'matched_work_events={len(rows)} input_files={len(sys.argv)-1}')
+if proxy_events:
+    print(f'proxy_operations={len(proxy_events)}')
+    for proxy_id, entries in sorted(proxy_events.items()):
+        by_phase = {entry['phase']: entry for entry in entries}
+        identity = next((entry for entry in entries
+                         if entry['direction'] != 'UNKNOWN' or entry['transport'] != 0), entries[0])
+        enqueue = by_phase.get(0)
+        start = by_phase.get(1)
+        first = by_phase.get(2)
+        complete = by_phase.get(3)
+        error = by_phase.get(4)
+        queue_delay = start['timestamp'] - enqueue['timestamp'] if enqueue and start else None
+        first_delay = first['timestamp'] - start['timestamp'] if first and start else None
+        duration = complete['timestamp'] - start['timestamp'] if complete and start else None
+        expected = (complete or first or start or enqueue)['expected']
+        progressed = (complete or first or start or enqueue)['progressed']
+        rate = float(progressed) * 1e9 / duration if duration and duration > 0 else None
+        fields = [f'id={proxy_id}', f"coll={identity['collective']}",
+                  f"plan={identity['plan']}", f"rank={identity['rank']}",
+                  f"channel={identity['channel']}", f"peer={identity['peer']}",
+                  f"direction={identity['direction']}", f"transport={identity['transport']}",
+                  f"expected_bytes={expected}"]
+        if queue_delay is not None: fields.append(f'queue_delay_ns={queue_delay}')
+        if first_delay is not None: fields.append(f'first_progress_delay_ns={first_delay}')
+        if duration is not None: fields.append(f'proxy_duration_ns={duration}')
+        if rate is not None: fields.append(f'progress_rate_Bps={rate:.1f}')
+        if error: fields.append(f"error_status={error['status']}")
+        if not complete and not error: fields.append('diagnostic=incomplete_proxy')
+        print('  proxy_timeline=' + ' '.join(fields))
 if summaries:
     print(f'channel_summaries={len(summaries)}')
     collective_windows = defaultdict(lambda: {'bytes': 0, 'duration': 0, 'channels': 0})

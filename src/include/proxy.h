@@ -122,6 +122,7 @@ struct ncclProxyOp {
   uint64_t telemetryCollectiveId;
   uint64_t telemetryPlanId;
   uint64_t telemetryBytes;
+  uint64_t telemetryProxyId;
 
   struct ncclProxyOp *enqNext;
 };
@@ -177,6 +178,11 @@ struct ncclProxySubArgs {
   uint64_t telemetryPlanId;
   uint64_t telemetryBytes;
   uint64_t telemetryStart;
+  uint64_t telemetryProxyId;
+  int telemetryDirection;
+  int telemetryTransport;
+  bool telemetryStarted;
+  bool telemetryFirstProgress;
 
   void* recvRequestsCache[NCCL_STEPS];
   int recvRequestsSubCount;

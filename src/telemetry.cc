@@ -31,6 +31,7 @@ struct TelemetryBuffer {
 TelemetryBuffer buffer;
 std::atomic<bool> initialized{false};
 std::atomic<uint64_t> collectiveIds{0};
+std::atomic<uint64_t> proxyIds{0};
 std::mutex stateMutex;
 
 struct ChannelPlanKey {
@@ -71,14 +72,16 @@ void dump() {
   uint64_t end = buffer.next.load(std::memory_order_acquire);
   uint64_t begin = end > kCapacity ? end - kCapacity : 0;
   uint64_t magic = 0x4e43434c54454c31ull; // NC CLTEL1
-  uint32_t version = 1;
+  uint32_t version = 2;
   uint32_t eventSize = sizeof(ncclTelemetryEvent);
   uint64_t dropped = buffer.dropped.load(std::memory_order_relaxed);
   fwrite(&magic, sizeof(magic), 1, f);
   fwrite(&version, sizeof(version), 1, f);
   fwrite(&eventSize, sizeof(eventSize), 1, f);
   fwrite(&dropped, sizeof(dropped), 1, f);
-  if (text != nullptr) fprintf(text, "HEADER version=%u event_size=%u events=%llu dropped=%llu\n",
+  if (text != nullptr) fprintf(text, "HEADER version=%u event_size=%u events=%llu dropped=%llu "
+                               "clock=monotonic_ns capabilities=proxy_progress,net_path,rdma_external_counters "
+                               "qp_wqe_cqe=unsupported\n",
                                version, eventSize, (unsigned long long)(end - begin),
                                (unsigned long long)dropped);
   for (uint64_t i = begin; i < end; ++i) {
@@ -187,6 +190,18 @@ void dump() {
               (e.reserved >> 2) & 0x1, (e.reserved >> 3) & 0x1);
       break;
     }
+    case NCCL_TELEM_PROXY_PROGRESS:
+      fprintf(text, "[%llu ns] PROXY_PROGRESS id=%llu coll=%llu plan=%llu rank=%u ch=%u "
+              "peer=%u direction=%s transport=%u phase=%u status=%u expected_bytes=%llu "
+              "progressed_bytes=%llu\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.value,
+              (unsigned long long)e.collectiveId, (unsigned long long)e.planId, e.rank,
+              e.channel, e.algorithm,
+              e.collective == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
+              e.collective == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
+              e.protocol, e.reserved & 0xff, (e.reserved >> 8) & 0xff,
+              (unsigned long long)e.payloadBytes, (unsigned long long)e.trafficBytes);
+      break;
     default:
       fprintf(text, "[%llu ns] EVENT type=%u\n", (unsigned long long)e.timestampNs, e.eventType);
       break;
@@ -247,6 +262,10 @@ uint64_t ncclTelemetryNextCollectiveId() {
   return collectiveIds.fetch_add(1, std::memory_order_relaxed);
 }
 
+uint64_t ncclTelemetryNextProxyId() {
+  return proxyIds.fetch_add(1, std::memory_order_relaxed);
+}
+
 void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collective,
                                    size_t payloadBytes, size_t trafficBytes) {
   {
@@ -280,6 +299,17 @@ void ncclTelemetryRecordPlan(uint64_t planId, int rank, uint64_t channelMask, in
 void ncclTelemetryRecordProxy(uint64_t planId, int rank, int channel, int pattern,
                               size_t bytes, uint64_t opCount) {
   record(NCCL_TELEM_PROXY_OP, 0, planId, rank, channel, 0, pattern, 0, bytes, bytes, opCount);
+}
+
+void ncclTelemetryRecordProxyProgress(uint64_t proxyId, uint64_t collectiveId,
+                                      uint64_t planId, int rank, int channel, int peer,
+                                      int direction, int transport, uint64_t expectedBytes,
+                                      uint64_t progressedBytes, uint32_t phase,
+                                      uint32_t status) {
+  if (ncclTelemetryLevel() < NCCL_TELEM_EXECUTION) return;
+  uint32_t reserved = (phase & 0xff) | ((status & 0xff) << 8);
+  record(NCCL_TELEM_PROXY_PROGRESS, collectiveId, planId, rank, channel, direction, peer,
+         transport, expectedBytes, progressedBytes, proxyId, reserved);
 }
 
 void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next) {

@@ -22,7 +22,8 @@ enum ncclTelemetryEventType : uint16_t {
   NCCL_TELEM_LAST_STEP = 11,
   NCCL_TELEM_CHANNEL_TRANSFER = 12,
   NCCL_TELEM_CHANNEL_SUMMARY = 13,
-  NCCL_TELEM_NET_PATH = 14
+  NCCL_TELEM_NET_PATH = 14,
+  NCCL_TELEM_PROXY_PROGRESS = 15
 };
 
 enum ncclTelemetryLevel : uint8_t {
@@ -42,6 +43,14 @@ enum ncclTelemetryNetBackend : uint8_t {
   NCCL_TELEM_NET_BACKEND_SOCKET = 1,
   NCCL_TELEM_NET_BACKEND_IB = 2,
   NCCL_TELEM_NET_BACKEND_PLUGIN = 3
+};
+
+enum ncclTelemetryProxyPhase : uint8_t {
+  NCCL_TELEM_PROXY_ENQUEUE = 0,
+  NCCL_TELEM_PROXY_START = 1,
+  NCCL_TELEM_PROXY_FIRST_PROGRESS = 2,
+  NCCL_TELEM_PROXY_COMPLETE = 3,
+  NCCL_TELEM_PROXY_ERROR = 4
 };
 
 struct ncclTelemetryEvent {
@@ -73,6 +82,7 @@ struct ncclTelemetryChannelSummary {
 void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collective,
                                    size_t payloadBytes, size_t trafficBytes);
 uint64_t ncclTelemetryNextCollectiveId();
+uint64_t ncclTelemetryNextProxyId();
 void ncclTelemetryFlush();
 int ncclTelemetryLevel();
 void ncclTelemetryRecordChannel(uint64_t collectiveId, uint64_t planId, int rank,
@@ -81,6 +91,11 @@ void ncclTelemetryRecordChannel(uint64_t collectiveId, uint64_t planId, int rank
 void ncclTelemetryRecordPlan(uint64_t planId, int rank, uint64_t channelMask, int nCollectives);
 void ncclTelemetryRecordProxy(uint64_t planId, int rank, int channel, int pattern,
                               size_t bytes, uint64_t opCount);
+void ncclTelemetryRecordProxyProgress(uint64_t proxyId, uint64_t collectiveId,
+                                      uint64_t planId, int rank, int channel, int peer,
+                                      int direction, int transport, uint64_t expectedBytes,
+                                      uint64_t progressedBytes, uint32_t phase,
+                                      uint32_t status);
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport,
                                   int direction, int pathType);
 void ncclTelemetryRecordNetPath(int rank, int peer, int channel, int connIndex, int direction,

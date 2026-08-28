@@ -17,6 +17,7 @@
 #include "cpuset.h"
 #include "compiler.h"
 #include "os.h"
+#include "telemetry.h"
 
 #include <assert.h>
 #include <algorithm>
@@ -392,6 +393,11 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   sub->telemetryPlanId = op->telemetryPlanId;
   sub->telemetryBytes = op->telemetryBytes;
   sub->telemetryStart = 0;
+  sub->telemetryProxyId = op->telemetryProxyId;
+  sub->telemetryDirection = NCCL_TELEM_DIRECTION_UNKNOWN;
+  sub->telemetryTransport = 0;
+  sub->telemetryStarted = false;
+  sub->telemetryFirstProgress = false;
   args->nsubs = subIndex+1;
   if (subIndex) {
     args->nChannels = std::min(args->nChannels, op->nChannels);
@@ -771,11 +777,35 @@ static ncclResult_t progressOps(struct ncclProxyState* proxyState, struct ncclPr
   ncclResult_t status = ncclSuccess;
   while (op) {
     if (op->state == ncclProxyOpNone) return ncclInternalError;
+    if (op->state == ncclProxyOpReady) {
+      for (int s = 0; s < op->nsubs; ++s) {
+        struct ncclProxySubArgs* sub = op->subs + s;
+        if (sub->telemetryStarted) continue;
+        sub->telemetryStarted = true;
+        ncclTelemetryRecordProxyProgress(sub->telemetryProxyId, sub->telemetryCollectiveId,
+                                         sub->telemetryPlanId, proxyState->comm->rank,
+                                         sub->channelId, sub->peer,
+                                         sub->telemetryDirection, sub->telemetryTransport,
+                                         sub->telemetryBytes, 0, NCCL_TELEM_PROXY_START, 0);
+      }
+    }
     TIME_START(0); TIME_START(1);
     ncclResult_t ret = op->progress(proxyState, op);
     if (op->idle) { TIME_STOP(1); TIME_CANCEL(0); } else { TIME_CANCEL(1); TIME_STOP(0); }
     *idle &= op->idle;
     if (op->state == ncclProxyOpNone || ret != ncclSuccess) {
+      for (int s = 0; s < op->nsubs; ++s) {
+        struct ncclProxySubArgs* sub = op->subs + s;
+        ncclTelemetryRecordProxyProgress(sub->telemetryProxyId, sub->telemetryCollectiveId,
+                                         sub->telemetryPlanId, proxyState->comm->rank,
+                                         sub->channelId, sub->peer,
+                                         sub->telemetryDirection, sub->telemetryTransport,
+                                         sub->telemetryBytes,
+                                         ret == ncclSuccess ? sub->telemetryBytes :
+                                           (sub->done == sub->nsteps ? sub->telemetryBytes : 0),
+                                         ret == ncclSuccess ? NCCL_TELEM_PROXY_COMPLETE : NCCL_TELEM_PROXY_ERROR,
+                                         uint32_t(ret));
+      }
       //track first error that occured
       if (ret != ncclSuccess && status == ncclSuccess) status = ret;
       TIME_START(2);
