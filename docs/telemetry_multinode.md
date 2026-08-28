@@ -229,7 +229,8 @@ Grouped receive and grouped send associations retain every real proxy owner but
 do not claim that duplicated associations represent additional physical CQEs.
 
 The report includes per-request lifecycle intervals, opcode/SGE totals,
-per-QP peak outstanding WRs/bytes, poll calls and empty ratio, CQE batch sizes,
+per-QP peak outstanding WRs/bytes, poll calls and empty ratio, CQE counts per
+aggregation window,
 poll busy time, and CQE latency avg/p50/p95/p99/max. It can surface
 `request_not_ready`, `verbs_post_slow`, `cq_not_polled`,
 `cq_polled_no_completion`, `cqe_returned_request_not_complete`, and WC/vendor

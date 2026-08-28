@@ -145,6 +145,8 @@ struct ncclIbGidInfo {
 };
 
 #define MAX_QPS_PER_REQ 8
+// Maximal number of QPs a communicator can have for data transfers.
+#define NCCL_IB_MAX_QPS 128
 struct ncclProfilerInfo {
   void* qpEventHandles[MAX_QPS_PER_REQ];
   int qpIndex[MAX_QPS_PER_REQ];
@@ -162,9 +164,6 @@ struct ncclProfilerInfo {
 #define NCCL_NET_IB_REQ_GIN_IPUT 4
 #define NCCL_NET_IB_REQ_GIN_IGET 5
 extern const char* ncclIbReqTypeStr[];
-
-// Maximal number of QPs a communicator can have for data transfers
-#define NCCL_IB_MAX_QPS 128
 
 // Tracks data transfers between sender and receiver. A multi-recv/send uses a
 // single record.
@@ -221,9 +220,9 @@ struct ncclIbRequest {
   uint32_t telemetryPollEmpty[NCCL_IB_MAX_DEVS_PER_NIC];
   uint32_t telemetryPollReturned[NCCL_IB_MAX_DEVS_PER_NIC];
   uint8_t telemetryPollSeen[NCCL_IB_MAX_DEVS_PER_NIC];
-  uint32_t telemetryRetireQpNum[MAX_QPS_PER_REQ];
-  uint32_t telemetryRetireWrs[MAX_QPS_PER_REQ];
-  uint64_t telemetryRetireBytes[MAX_QPS_PER_REQ];
+  uint32_t telemetryRetireQpNum[NCCL_IB_MAX_QPS];
+  uint32_t telemetryRetireWrs[NCCL_IB_MAX_QPS];
+  uint64_t telemetryRetireBytes[NCCL_IB_MAX_QPS];
   uint8_t telemetryRetireCount;
   int nreqs;
   union {

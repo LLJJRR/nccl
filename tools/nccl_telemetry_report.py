@@ -115,7 +115,8 @@ for path in sys.argv[1:]:
                  bytes_) = m.groups()
                 rdma_events[(int(rank), int(proxy_id))].append({
                     'timestamp': int(ts), 'collective': int(coll), 'plan': plan,
-                    'rank': int(rank), 'channel': int(ch), 'peer': int(peer), 'direction': direction,
+                    'rank': int(rank), 'proxy': int(proxy_id), 'channel': int(ch),
+                    'peer': int(peer), 'direction': direction,
                     'request': int(request_id), 'qp': int(qp), 'wr_id': int(wr_id),
                     'opcode': int(opcode), 'status': int(status), 'phase': int(phase),
                     'owner_index': int(owner_index or 0), 'owner_count': int(owner_count or 1),
@@ -229,7 +230,31 @@ if headers:
     if dropped:
         print(f'diagnostic=telemetry_events_dropped:count={dropped}')
 if rdma_states:
+    # A grouped NET request is emitted once per proxy owner. Recover a
+    # best-effort physical-request count from the RDMA_REQUEST records while
+    # retaining the old rdma_requests field for consumers that used it as a
+    # record count.
+    request_associations = defaultdict(list)
+    physical_request_keys = set()
+    for entries in rdma_events.values():
+        for event in entries:
+            request_associations[(event['rank'], event['proxy'], event['request'])].append(event)
+    for key in rdma_states:
+        associations = request_associations.get(key, [])
+        grouped = [event for event in associations if event['owner_count'] > 1]
+        if grouped:
+            event = grouped[0]
+            physical_request_keys.add(('grouped', event['rank'], event['collective'],
+                                       event['request'], event['owner_count']))
+        else:
+            # Grouped sends use distinct ncclIbRequest objects that may share an
+            # encoded request ID, so retain the proxy owner in the key.
+            physical_request_keys.add(('single',) + key)
     print(f'rdma_requests={len(rdma_states)}')
+    print(f'rdma_request_records={len(rdma_states)}')
+    if physical_request_keys:
+        print(f'rdma_physical_requests={len(physical_request_keys)}')
+    print(f'rdma_logical_associations={len(rdma_states)}')
     all_completion_latencies = []
     for key, states in sorted(rdma_states.items()):
         rank, proxy_id, request_id = key
@@ -242,12 +267,16 @@ if rdma_states:
         depths = rdma_depths.get(key, [])
         polls = rdma_polls.get(key, [])
         cqes = rdma_cqe_details.get(key, [])
+        associations = request_associations.get(key, [])
+        owner_counts = [event['owner_count'] for event in associations if event['owner_count'] > 1]
         fields = [f'request={request_id}', f'proxy={proxy_id}', f'rank={rank}',
                   f'channel={latest["channel"]}', f'type={latest["type"]}',
                   f'expected_bytes={latest["expected"]}', f'posted_bytes={latest["posted"]}',
                   f'completed_bytes={latest["completed"]}', f'wrs={len(wrs)}',
                   f'sges={len(sges)}', f'sge_bytes={sum(sge["length"] for sge in sges)}',
                   f'cqes={len(cqes)}']
+        if owner_counts:
+            fields.append(f'grouped_owner_count={max(owner_counts)}')
         phase_names = ((0, 1, 'create_to_ready_ns'), (1, 2, 'ready_to_post_begin_ns'),
                        (2, 3, 'post_begin_to_end_ns'))
         for begin, end, name in phase_names:
@@ -271,7 +300,7 @@ if rdma_states:
         if polls:
             fields.extend((f'poll_calls={poll_calls}', f'empty_poll_ratio={empty_polls/max(1, poll_calls):.3f}',
                            f'polled_cqes={returned_cqes}', f'poll_busy_ns={sum(poll["busy"] for poll in polls)}',
-                           f'max_cqe_batch={max(poll["returned"] for poll in polls)}'))
+                           f'max_cqes_per_window={max(poll["returned"] for poll in polls)}'))
         post_times = defaultdict(list)
         for wr in wrs:
             if wr['flags'] & 2:
