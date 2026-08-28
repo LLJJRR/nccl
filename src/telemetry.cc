@@ -22,6 +22,7 @@ NCCL_PARAM(TelemetryLevel, "TELEMETRY_LEVEL", 0);
 
 namespace {
 constexpr uint64_t kCapacity = 1ull << 16;
+static_assert(sizeof(ncclTelemetryEvent) == 72, "telemetry event ABI changed");
 struct TelemetryBuffer {
   std::atomic<uint64_t> next{0};
   std::atomic<uint64_t> dropped{0};
@@ -33,8 +34,9 @@ std::atomic<bool> initialized{false};
 std::atomic<uint64_t> collectiveIds{0};
 std::atomic<uint64_t> proxyIds{0};
 std::mutex stateMutex;
-thread_local ncclTelemetryNetRequestContext netRequestContext{};
-thread_local bool netRequestContextValid = false;
+constexpr size_t kMaxNetRequestContexts = 8;
+thread_local ncclTelemetryNetRequestContext netRequestContexts[kMaxNetRequestContexts];
+thread_local size_t netRequestContextCount = 0;
 
 struct ChannelPlanKey {
   uint64_t collectiveId;
@@ -64,12 +66,17 @@ uint64_t nowNs() {
 
 void dump() {
   if (!initialized.load(std::memory_order_relaxed)) return;
-  char path[128];
-  snprintf(path, sizeof(path), "/tmp/nccl_telemetry.%d.bin", int(getpid()));
+  const char* outputDir = getenv("NCCL_TELEMETRY_DIR");
+  if (outputDir == nullptr || outputDir[0] == '\0') outputDir = "/tmp";
+  char hostname[64] = "unknown";
+  gethostname(hostname, sizeof(hostname));
+  hostname[sizeof(hostname)-1] = '\0';
+  char path[512];
+  snprintf(path, sizeof(path), "%s/nccl_telemetry.%s.%d.bin", outputDir, hostname, int(getpid()));
   FILE* f = fopen(path, "wb");
   if (f == nullptr) return;
-  char textPath[128];
-  snprintf(textPath, sizeof(textPath), "/tmp/nccl_telemetry.%d.txt", int(getpid()));
+  char textPath[512];
+  snprintf(textPath, sizeof(textPath), "%s/nccl_telemetry.%s.%d.txt", outputDir, hostname, int(getpid()));
   FILE* text = fopen(textPath, "w");
   uint64_t end = buffer.next.load(std::memory_order_acquire);
   uint64_t begin = end > kCapacity ? end - kCapacity : 0;
@@ -82,10 +89,10 @@ void dump() {
   fwrite(&eventSize, sizeof(eventSize), 1, f);
   fwrite(&dropped, sizeof(dropped), 1, f);
   if (text != nullptr) fprintf(text, "HEADER version=%u event_size=%u events=%llu dropped=%llu "
-                               "clock=monotonic_ns capabilities=proxy_progress,net_path,rdma_external_counters "
+                               "clock=monotonic_ns level=%d capabilities=proxy_progress,net_path,rdma_external_counters "
                                "qp_wqe_cqe=ib_internal_diagnostic\n",
                                version, eventSize, (unsigned long long)(end - begin),
-                               (unsigned long long)dropped);
+                               (unsigned long long)dropped, ncclTelemetryLevel());
   for (uint64_t i = begin; i < end; ++i) {
     const ncclTelemetryEvent& e = buffer.events[i % kCapacity];
     fwrite(&e, sizeof(ncclTelemetryEvent), 1, f);
@@ -208,7 +215,7 @@ void dump() {
     case NCCL_TELEM_RDMA_REQUEST:
       fprintf(text, "[%llu ns] RDMA_REQUEST proxy=%llu coll=%llu plan=unavailable rank=%u ch=%u "
               "peer=%u direction=%s request=%llu qp=%u wr_id=%llu opcode=%u status=%u "
-              "phase=%u bytes=%llu\n",
+              "phase=%u owner_index=%u owner_count=%u completion_expected=%u bytes=%llu\n",
               (unsigned long long)e.timestampNs,
               (unsigned long long)e.planId,
               (unsigned long long)e.collectiveId,
@@ -219,6 +226,9 @@ void dump() {
               (unsigned long long)e.trafficBytes, uint32_t((e.value >> 56) & 0xff),
               (e.collective >> 8) & 0xff,
               e.reserved & 0xff,
+              (e.reserved >> 8) & 0xff,
+              (e.reserved >> 16) & 0xff,
+              (e.reserved >> 24) & 0x1,
               (unsigned long long)e.payloadBytes);
       break;
     default:
@@ -335,30 +345,49 @@ void ncclTelemetryRecordProxyProgress(uint64_t proxyId, uint64_t collectiveId,
 void ncclTelemetrySetNetRequestContext(uint64_t proxyId, uint64_t collectiveId,
                                        uint64_t planId, int rank, int channel, int peer,
                                        int direction) {
-  netRequestContext = {proxyId, collectiveId, planId, rank, channel, peer, direction};
-  netRequestContextValid = true;
+  netRequestContexts[0] = {proxyId, collectiveId, planId, rank, channel, peer, direction};
+  netRequestContextCount = 1;
+}
+
+void ncclTelemetrySetNetRequestContexts(const ncclTelemetryNetRequestContext* contexts,
+                                        size_t count) {
+  if (contexts == nullptr) count = 0;
+  netRequestContextCount = count < kMaxNetRequestContexts ? count : kMaxNetRequestContexts;
+  for (size_t i = 0; i < netRequestContextCount; ++i) netRequestContexts[i] = contexts[i];
 }
 
 void ncclTelemetryClearNetRequestContext() {
-  netRequestContextValid = false;
+  netRequestContextCount = 0;
 }
 
 bool ncclTelemetryGetNetRequestContext(ncclTelemetryNetRequestContext* context) {
-  if (!netRequestContextValid || context == nullptr) return false;
-  *context = netRequestContext;
+  if (netRequestContextCount == 0 || context == nullptr) return false;
+  *context = netRequestContexts[0];
   return true;
+}
+
+size_t ncclTelemetryGetNetRequestContexts(ncclTelemetryNetRequestContext* contexts,
+                                          size_t capacity) {
+  if (contexts == nullptr) return 0;
+  size_t count = netRequestContextCount < capacity ? netRequestContextCount : capacity;
+  for (size_t i = 0; i < count; ++i) contexts[i] = netRequestContexts[i];
+  return count;
 }
 
 void ncclTelemetryRecordRdmaRequest(const ncclTelemetryNetRequestContext* context,
                                     uint64_t requestId, uint32_t qpNum, uint64_t wrId,
                                     uint32_t opcode, uint32_t status, uint64_t bytes,
-                                    uint32_t phase) {
+                                    uint32_t phase, uint32_t ownerIndex,
+                                    uint32_t ownerCount, bool completionExpected) {
   if (context == nullptr || ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
   // Event-specific layout: planId=full proxy id, algorithm=peer, protocol=QP
   // number, traffic=wr_id, value=request id with opcode in the high byte,
-  // collective carries direction/status, and reserved carries phase. The
-  // original plan is recovered through the proxy event.
-  uint32_t reserved = phase & 0xff;
+  // collective carries direction/status. Reserved carries phase and the
+  // position in a grouped receive request. The original plan is recovered
+  // through the proxy event.
+  uint32_t reserved = (phase & 0xff) | ((ownerIndex & 0xff) << 8) |
+                      ((ownerCount & 0xff) << 16) |
+                      (uint32_t(completionExpected) << 24);
   uint64_t requestValue = (requestId & 0x00ffffffffffffffull) |
                           (uint64_t(opcode & 0xff) << 56);
   record(NCCL_TELEM_RDMA_REQUEST, context->collectiveId, context->proxyId, context->rank,

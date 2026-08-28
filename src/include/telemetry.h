@@ -57,7 +57,8 @@ enum ncclTelemetryProxyPhase : uint8_t {
 enum ncclTelemetryRdmaPhase : uint8_t {
   NCCL_TELEM_RDMA_WQE_POST = 0,
   NCCL_TELEM_RDMA_CQE = 1,
-  NCCL_TELEM_RDMA_REQUEST_COMPLETE = 2
+  NCCL_TELEM_RDMA_REQUEST_COMPLETE = 2,
+  NCCL_TELEM_RDMA_POLL_DELAY = 3
 };
 
 struct ncclTelemetryNetRequestContext {
@@ -117,12 +118,17 @@ void ncclTelemetryRecordProxyProgress(uint64_t proxyId, uint64_t collectiveId,
 void ncclTelemetrySetNetRequestContext(uint64_t proxyId, uint64_t collectiveId,
                                        uint64_t planId, int rank, int channel, int peer,
                                        int direction);
+void ncclTelemetrySetNetRequestContexts(const ncclTelemetryNetRequestContext* contexts,
+                                        size_t count);
 void ncclTelemetryClearNetRequestContext();
 bool ncclTelemetryGetNetRequestContext(ncclTelemetryNetRequestContext* context);
+size_t ncclTelemetryGetNetRequestContexts(ncclTelemetryNetRequestContext* contexts,
+                                          size_t capacity);
 void ncclTelemetryRecordRdmaRequest(const ncclTelemetryNetRequestContext* context,
                                     uint64_t requestId, uint32_t qpNum, uint64_t wrId,
                                     uint32_t opcode, uint32_t status, uint64_t bytes,
-                                    uint32_t phase);
+                                    uint32_t phase, uint32_t ownerIndex,
+                                    uint32_t ownerCount, bool completionExpected);
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport,
                                   int direction, int pathType);
 void ncclTelemetryRecordNetPath(int rank, int peer, int channel, int connIndex, int direction,

@@ -14,9 +14,12 @@ proxy_progress = re.compile(
 rdma_request = re.compile(
     r"\[(\d+) ns\] RDMA_REQUEST proxy=(\d+) coll=(\d+) plan=(\S+) rank=(\d+) ch=(\d+) "
     r"peer=(\d+) direction=(SEND|RECV|UNKNOWN) request=(\d+) qp=(\d+) wr_id=(\d+) "
-    r"opcode=(\d+) status=(\d+) phase=(\d+) bytes=(\d+)"
+    r"opcode=(\d+) status=(\d+) phase=(\d+) "
+    r"(?:owner_index=(\d+) owner_count=(\d+) )?"
+    r"(?:completion_expected=(\d+) )?bytes=(\d+)"
 )
 events, transports = defaultdict(dict), Counter()
+headers = []
 transport_edges = defaultdict(lambda: {'count': 0, 'channels': set(), 'conn': set()})
 network_paths = defaultdict(lambda: {'count': 0, 'channels': set(), 'conn': set(), 'speed': 0})
 collectives = defaultdict(lambda: {'ranks': set(), 'payload': 0, 'traffic': 0, 'first': [], 'last': []})
@@ -26,12 +29,17 @@ transfers = defaultdict(lambda: {'bytes': 0, 'ops': 0, 'first': None, 'last': No
 peer_transfers = defaultdict(lambda: {'bytes': 0, 'ops': 0, 'steps': set()})
 work_windows = defaultdict(lambda: {'first': None, 'last': None})
 summaries = []
-host_times = []
+host_times = defaultdict(list)
 proxy_events = defaultdict(list)
 rdma_events = defaultdict(list)
 for path in sys.argv[1:]:
     with open(path, errors="replace") as f:
         for line in f:
+            if line.startswith('HEADER '):
+                values = dict(re.findall(r'(\w+)=([^ ]+)', line.strip()))
+                values['source'] = path
+                headers.append(values)
+                continue
             m = work.search(line)
             if m:
                 host, kind, coll, plan, rank, ch, counter, timer = m.groups()
@@ -43,7 +51,7 @@ for path in sys.argv[1:]:
                     coll, plan = -1, 0
             if m:
                 events[(coll, plan, int(rank), int(ch), int(counter))][kind] = (int(timer), int(host))
-                host_times.append((int(timer), int(host)))
+                host_times[path].append((int(timer), int(host)))
                 w = work_windows[(coll, plan, int(rank), int(ch))]
                 if kind == 'START': w['first'] = int(host) if w['first'] is None else min(w['first'], int(host))
                 else: w['last'] = int(host) if w['last'] is None else max(w['last'], int(host))
@@ -60,12 +68,15 @@ for path in sys.argv[1:]:
             m = rdma_request.search(line)
             if m:
                 (ts, proxy_id, coll, plan, rank, ch, peer, direction, request_id, qp, wr_id,
-                 opcode, status, phase, bytes_) = m.groups()
+                 opcode, status, phase, owner_index, owner_count, completion_expected,
+                 bytes_) = m.groups()
                 rdma_events[(int(rank), int(proxy_id))].append({
                     'timestamp': int(ts), 'collective': int(coll), 'plan': plan,
                     'rank': int(rank), 'channel': int(ch), 'peer': int(peer), 'direction': direction,
                     'request': int(request_id), 'qp': int(qp), 'wr_id': int(wr_id),
                     'opcode': int(opcode), 'status': int(status), 'phase': int(phase),
+                    'owner_index': int(owner_index or 0), 'owner_count': int(owner_count or 1),
+                    'completion_expected': int(completion_expected) if completion_expected is not None else 1,
                     'bytes': int(bytes_)
                 })
             m = re.search(r"TRANSPORT rank=(\d+) peer=(\d+) ch=(\d+) conn=(\d+)(?: direction=(SEND|RECV))? type=(\w+) path=(\w+) path_type=(\d+)", line)
@@ -124,6 +135,13 @@ rows = [(k, v['END'][0]-v['START'][0], v['END'][1]-v['START'][1], v['START'][1],
         if 'START' in v and 'END' in v and v['END'][0] >= v['START'][0]]
 print('NCCL Telemetry Report')
 print(f'matched_work_events={len(rows)} input_files={len(sys.argv)-1}')
+dropped = 0
+if headers:
+    dropped = sum(int(header.get('dropped', 0)) for header in headers)
+    levels = sorted(set(header.get('level', 'unknown') for header in headers))
+    print(f'trace_headers={len(headers)} levels={levels} dropped_events={dropped}')
+    if dropped:
+        print(f'diagnostic=telemetry_events_dropped:count={dropped}')
 if proxy_events:
     print(f'proxy_operations={len(proxy_events)}')
     for (proxy_rank, proxy_id), entries in sorted(proxy_events.items()):
@@ -157,10 +175,14 @@ if proxy_events:
         if rdma:
             posts = [event for event in rdma if event['phase'] == 0]
             cqes = [event for event in rdma if event['phase'] == 1]
+            poll_delays = [event for event in rdma if event['phase'] == 3]
             qps = sorted(set(event['qp'] for event in rdma if event['qp']))
             statuses = sorted(set(event['status'] for event in cqes if event['status']))
+            grouped = [event for event in rdma if event['owner_count'] > 1]
+            signaled_posts = [event for event in posts if event['completion_expected']]
+            unsignaled_posts = [event for event in posts if not event['completion_expected']]
             post_times = defaultdict(list)
-            for event in posts:
+            for event in signaled_posts:
                 post_times[(event['request'], event['qp'], event['wr_id'])].append(event['timestamp'])
             completion_latencies = []
             for event in cqes:
@@ -170,11 +192,22 @@ if proxy_events:
             unmatched_posts = sum(len(times) for times in post_times.values())
             fields.append(f'rdma_wqe_posts={len(posts)}')
             fields.append(f'rdma_cqes={len(cqes)}')
+            fields.append(f'rdma_signaled_posts={len(signaled_posts)}')
+            fields.append(f'rdma_unsignaled_posts={len(unsignaled_posts)}')
             fields.append(f'rdma_qps={qps}')
             if completion_latencies:
                 fields.append(f'rdma_max_completion_ns={max(completion_latencies)}')
             fields.append(f'rdma_unmatched_posts={unmatched_posts}')
+            if poll_delays:
+                fields.append(f'rdma_injected_poll_delay_us={sum(event["bytes"] for event in poll_delays)}')
+                fields.append('diagnostic=injected_cq_poll_delay')
+            if grouped:
+                fields.append(f'rdma_grouped_events={len(grouped)}')
+                fields.append(f'rdma_max_owner_count={max(event["owner_count"] for event in grouped)}')
             if statuses: fields.append(f'rdma_statuses={statuses}')
+            if statuses: fields.append('diagnostic=rdma_wc_error')
+            if unmatched_posts and not dropped:
+                fields.append('diagnostic=missing_signaled_cqe')
         if not complete and not error: fields.append('diagnostic=incomplete_proxy')
         print('  proxy_timeline=' + ' '.join(fields))
 if summaries:
@@ -206,9 +239,10 @@ with open(sys.argv[1], errors='replace') as f:
 if ring:
     print(f'topology_ring_edges={len(ring)}')
     for line in ring[:8]: print('  ' + line)
-if host_times:
-    tr = max(x[0] for x in host_times)-min(x[0] for x in host_times); hr = max(x[1] for x in host_times)-min(x[1] for x in host_times)
-    print(f'gpu_timer_range_ticks={tr} host_range_ns={hr} calibrated_tick_ns={(hr/tr):.6f}' if tr else f'gpu_timer_range_ticks=0 host_range_ns={hr}')
+for source, samples in sorted(host_times.items()):
+    tr = max(x[0] for x in samples)-min(x[0] for x in samples); hr = max(x[1] for x in samples)-min(x[1] for x in samples)
+    prefix = f'source={os.path.basename(source)} '
+    print(prefix + (f'gpu_timer_range_ticks={tr} host_range_ns={hr} calibrated_tick_ns={(hr/tr):.6f}' if tr else f'gpu_timer_range_ticks=0 host_range_ns={hr}'))
 if transports:
     print('transports=' + ', '.join(f'{k}:{v}' for k,v in sorted(transports.items())))
 if transport_edges:

@@ -25,6 +25,8 @@ NET_PATH = re.compile(
     r"path_type=(?P<path_type>\d+) shared=(?P<shared>\d+) "
     r"same_device=(?P<same_device>\d+)"
 )
+HEALTH_TERMS = ("retry", "retrans", "error", "discard", "drop", "cnp", "ecn",
+                "pfc", "wait", "congestion")
 
 
 def normalize_guid(value):
@@ -73,6 +75,13 @@ def build_report(paths, ports):
         matches = ports.get((record["guid"], record["port"]), [])
         row = dict(record)
         row["rdma_matches"] = matches
+        row["health_signals"] = [
+            {"device": match.get("device"), "port": match.get("port"),
+             "counter": name, "delta": value}
+            for match in matches
+            for name, value in match.get("deltas", {}).items()
+            if value and any(term in name.lower() for term in HEALTH_TERMS)
+        ]
         row["diagnostic"] = None if matches else "unmatched_rdma_port"
         rows.append(row)
     return rows
@@ -106,7 +115,9 @@ def main():
         match_text = "none"
         if row["rdma_matches"]:
             match_text = ", ".join(
-                f"{item.get('device')}:{item.get('port')} tx={item.get('derived', {}).get('tx_bytes', 0)} "
+                f"{item.get('device')}:{item.get('port')} link_layer={item.get('link_layer')} "
+                f"state={item.get('state')} rate={item.get('rate')} "
+                f"tx={item.get('derived', {}).get('tx_bytes', 0)} "
                 f"rx={item.get('derived', {}).get('rx_bytes', 0)}"
                 for item in row["rdma_matches"]
             )
@@ -115,6 +126,9 @@ def main():
               f"gdr={row['gdr']} rdma={match_text}")
         if row["diagnostic"]:
             print(f"diagnostic={row['diagnostic']} guid={row['guid']} port={row['port']}")
+        for signal in row["health_signals"]:
+            print(f"rdma_health_evidence device={signal['device']} port={signal['port']} "
+                  f"counter={signal['counter']} delta={signal['delta']}")
     return 0
 
 

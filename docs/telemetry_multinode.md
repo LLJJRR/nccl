@@ -4,7 +4,8 @@ This branch provides a low-overhead multi-node execution trace for
 AllReduce, AllGather, and ReduceScatter.  The trace joins:
 
 ```
-collective -> channel -> proxy -> NET_PATH -> NIC/port -> external RDMA counters
+collective -> channel -> proxy -> NET_PATH -> NIC/port -> QP -> WQE/CQE
+                                                   \-> external RDMA counters
 ```
 
 ## Collection levels
@@ -18,14 +19,82 @@ enqueue/start/first-progress/complete timestamps and channel summaries.  Use
 this level to measure queue delay, first-progress delay, proxy duration, and
 progress rate.
 
-`NCCL_TELEMETRY_ENABLE=1 NCCL_TELEMETRY_LEVEL=2` adds per-step transfer and
-GPU work events.  This is a diagnostic mode and should only be used for a
-short reproduction because event volume is much higher.
+`NCCL_TELEMETRY_ENABLE=1 NCCL_TELEMETRY_LEVEL=2` adds per-step transfer, GPU
+work, and in-tree IB request/QP/WQE/CQE events.  This is a diagnostic mode and
+should only be used for a short reproduction because event volume is much
+higher.
 
 All timestamps in the NCCL text trace are `CLOCK_MONOTONIC` nanoseconds.  The
 trace header declares this clock domain and the supported capabilities.  Host
 monotonic clocks are not assumed to be synchronized across nodes; align node
 traces with an external clock offset when doing cross-node timeline analysis.
+The current tools intentionally do not estimate that offset. Durations and
+ordering within one process are valid; do not subtract timestamps originating
+on different hosts.
+
+Set `NCCL_TELEMETRY_DIR` to an existing directory to keep each experiment's
+traces together. Trace filenames contain hostname and PID, so ranks on
+different hosts cannot overwrite one another in a shared directory.
+
+## Automated two-node matrix
+
+The matrix runner covers AllReduce, AllGather, and ReduceScatter at 1 MiB,
+64 MiB, and 1 GiB. For every case it runs telemetry OFF, level 1, and level 2,
+and compares the native IB path with `NCCL_IB_DISABLE=1`. It captures RDMA
+counters once per host before and after every run and generates per-run
+telemetry and NIC-path reports.
+
+The NCCL build, MPI-enabled nccl-tests build, helper scripts, and output path
+must be visible at the same path on both nodes. Example for eight ranks:
+
+```bash
+export NCCL_TEST_DIR=/shared/nccl-tests/build
+export NCCL_LIB=/shared/nccl/build/lib
+export NCCL_MPI_NP=8
+export NCCL_MPI_ARGS="--hostfile /shared/hosts --map-by ppr:4:node"
+export NCCL_MULTINODE_OUT=/shared/results/nccl-telemetry-001
+
+tools/nccl_multinode_matrix.sh
+```
+
+The output directory contains:
+
+```text
+results.csv                         raw result for every independent run
+summary.csv                         mean throughput and OFF-relative overhead
+<case>/nccl-tests.log               original benchmark output
+<case>/traces/*.txt                 one telemetry trace per rank
+<case>/telemetry.report.txt         collective/channel/proxy/RDMA diagnosis
+<case>/rdma.{before,after}.*.json   per-host NIC snapshots
+<case>/rdma.diff.*.json             per-host counter deltas
+<case>/rdma.report.*.txt            GUID+port path join for that host
+```
+
+Useful overrides are `NCCL_MATRIX_SIZES`, `NCCL_MATRIX_COLLECTIVES`,
+`NCCL_MATRIX_MODES`, `NCCL_MATRIX_CONTROLS`, `NCCL_MATRIX_REPEATS`,
+`NCCL_TEST_ITERATIONS`, and `NCCL_TEST_WARMUP`. The defaults use three measured
+iterations and two warmups to keep level-2 traces bounded. Set `NCCL_IB_HCA` to
+constrain the IB baseline to a particular HCA or rail. Set
+`NCCL_RDMA_COUNTERS=0` only on systems without `/sys/class/infiniband`.
+
+For a reproducible diagnostic fault, the in-tree IB backend can delay CQ
+polling once in the matching rank process. This does not emulate wire
+congestion; it verifies that the trace can distinguish a posted WQE from
+delayed completion observation. The hook is disabled by default and only takes
+effect when level-2 request context is present:
+
+```bash
+export NCCL_MATRIX_CONTROLS="ib ib_poll_delay"
+export NCCL_MATRIX_MODES="off level2"
+export NCCL_TELEMETRY_FAULT_IB_POLL_DELAY_US=5000
+export NCCL_TELEMETRY_FAULT_IB_POLL_DELAY_RANK=7
+export NCCL_TELEMETRY_FAULT_IB_POLL_DELAY_CHANNEL=6
+tools/nccl_multinode_matrix.sh
+```
+
+The matching proxy report must contain
+`diagnostic=injected_cq_poll_delay`; this prevents the controlled host-side
+delay from being mislabeled as physical network congestion.
 
 ## RDMA correlation
 
@@ -36,7 +105,7 @@ tools/nccl_rdma_counters.py snapshot -o before.json
 # run the two-node NCCL benchmark here
 tools/nccl_rdma_counters.py snapshot -o after.json
 tools/nccl_rdma_counters.py diff before.json after.json --json > rdma-diff.json
-tools/nccl_rdma_report.py /tmp/nccl_telemetry.<pid>.txt --rdma-diff rdma-diff.json
+tools/nccl_rdma_report.py /tmp/nccl_telemetry.<host>.<pid>.txt --rdma-diff rdma-diff.json
 ```
 
 The join key is normalized `GUID + port`, which is also printed by the
@@ -74,6 +143,16 @@ plugins report no QP/WQE/CQE records rather than guessing them.  A
 plugin-specific adapter can add equivalent records later without changing the
 core collective/channel/proxy schema.
 
+WQE records also identify whether a CQE is expected. Unsignaled send WQEs are
+reported separately and are not counted as unmatched posts; their completion
+is covered by the later signaled WQE on the same send queue.
+
+A grouped receive is one physical IB request owned by multiple NCCL proxy
+sub-operations. Each `RDMA_REQUEST` association therefore includes
+`owner_index` and `owner_count`. The report attaches the shared WQE/CQE to
+every real owner without claiming that those associations are separate
+physical requests.
+
 The existing proxy timeline still distinguishes queue delay (enqueue to
 start), first-progress delay (start to first completed transfer), and proxy
 duration (start to completion).  This is sufficient to separate NCCL/proxy
@@ -83,7 +162,8 @@ scheduling delay from a path-level RDMA counter anomaly in the first delivery.
 
 For a two-node multi-GPU run, the deliverable should include:
 
-1. One trace per rank, merged with `tools/nccl_telemetry_merge.py`.
+1. One hostname/PID trace per rank, bundled with
+   `tools/nccl_telemetry_merge.py` without cross-host timestamp arithmetic.
 2. A report showing collective/channel/proxy/NIC path associations.
 3. Before/after RDMA counter snapshots and a GUID/port join report.
 4. A baseline versus level-1 overhead measurement, plus a short level-2
@@ -96,3 +176,14 @@ WQE posts, CQEs, and request completion.  The report summarizes QP IDs,
 completion latency, unmatched posts, and non-zero WC status.  Pre-posted
 receive buffers and third-party NET plugins may not expose a one-to-one WQE
 mapping; those cases remain explicitly partial/unsupported.
+
+Hardware acceptance is complete only after a real two-node run shows all
+expected ranks and collectives, zero nccl-tests errors, IB `NET_PATH` records,
+matching GUID/port counters, level-2 WQE/CQE records for the in-tree IB backend,
+and a measurable Socket-path change under `NCCL_IB_DISABLE=1`.
+
+The matrix runner fails if an enabled run produces fewer traces than MPI ranks,
+if an OFF run unexpectedly emits traces, or if nccl-tests reports a non-zero
+wrong-result count. Reports surface ring-buffer drops, unmatched signaled WQEs,
+WC errors, and non-zero retry/error/congestion-related NIC counters rather than
+silently treating a partial trace as complete.

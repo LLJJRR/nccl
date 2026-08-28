@@ -1524,6 +1524,8 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
       int tags[NCCL_PROXY_MAX_SUBS];
       void* mhandles[NCCL_PROXY_MAX_SUBS];
       void* phandles[NCCL_PROXY_MAX_SUBS];
+      ncclTelemetryNetRequestContext telemetryContexts[NCCL_PROXY_MAX_SUBS];
+      bool telemetryRdma = ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC;
       for (int i=0; i<subGroup->groupSize; i++) {
         struct ncclProxySubArgs* sub = subGroup + i;
         int postedStepId = sub->posted;
@@ -1569,6 +1571,9 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
           tags[subCount] = resources->tpRemoteRank;
           mhandles[subCount] = sub->recvMhandle;
           phandles[subCount] = &sub->pHandles[DIVUP(postedStepId, args->sliceSteps)%NCCL_STEPS];
+          if (telemetryRdma) telemetryContexts[subCount] = {
+            sub->telemetryProxyId, sub->telemetryCollectiveId, sub->telemetryPlanId,
+            proxyState->comm->rank, sub->channelId, sub->peer, NCCL_TELEM_DIRECTION_RECV};
           subCount++;
         }
       }
@@ -1580,15 +1585,9 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
         if (!checkedNetAttr++)
           setXferNetAttrs(proxyState, args, 0);
         if (ignoreCompletion) *requestPtr = (void *)NCCL_NET_OPTIONAL_RECV_COMPLETION;
-        bool telemetryRdma = ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC;
-        // A multi-receive request represents several NCCL sub-operations. Do
-        // not attribute its WQEs/CQEs to the first proxy; keep the higher-level
-        // proxy/transfer records instead of emitting a false one-to-one join.
-        telemetryRdma = telemetryRdma && subCount == 1;
-        if (telemetryRdma) ncclTelemetrySetNetRequestContext(
-          subGroup->telemetryProxyId, subGroup->telemetryCollectiveId,
-          subGroup->telemetryPlanId, proxyState->comm->rank, subGroup->channelId,
-          subGroup->peer, NCCL_TELEM_DIRECTION_RECV);
+        if (telemetryRdma) {
+          ncclTelemetrySetNetRequestContexts(telemetryContexts, subCount);
+        }
         ncclResult_t netResult = proxyState->ncclNet->irecv(resources->netRecvComm, subCount,
           ptrs, sizes, tags, mhandles, phandles, requestPtr);
         if (telemetryRdma) ncclTelemetryClearNetRequestContext();

@@ -204,8 +204,8 @@ struct ncclIbRequest {
   struct ncclProfilerInfo pInfo[NCCL_NET_IB_MAX_RECVS];
 #endif
   uint64_t id;
-  ncclTelemetryNetRequestContext telemetryContext;
-  bool telemetryContextValid;
+  ncclTelemetryNetRequestContext telemetryContexts[NCCL_NET_IB_MAX_RECVS];
+  uint8_t telemetryContextCount;
   int nreqs;
   union {
     struct {
