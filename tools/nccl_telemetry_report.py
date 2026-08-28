@@ -12,7 +12,7 @@ proxy_progress = re.compile(
     r"expected_bytes=(\d+) progressed_bytes=(\d+)"
 )
 rdma_request = re.compile(
-    r"\[(\d+) ns\] RDMA_REQUEST proxy=(\d+) coll=(\d+) plan=(\d+) rank=(\d+) ch=(\d+) "
+    r"\[(\d+) ns\] RDMA_REQUEST proxy=(\d+) coll=(\d+) plan=(\S+) rank=(\d+) ch=(\d+) "
     r"peer=(\d+) direction=(SEND|RECV|UNKNOWN) request=(\d+) qp=(\d+) wr_id=(\d+) "
     r"opcode=(\d+) status=(\d+) phase=(\d+) bytes=(\d+)"
 )
@@ -62,7 +62,7 @@ for path in sys.argv[1:]:
                 (ts, proxy_id, coll, plan, rank, ch, peer, direction, request_id, qp, wr_id,
                  opcode, status, phase, bytes_) = m.groups()
                 rdma_events[(int(rank), int(proxy_id))].append({
-                    'timestamp': int(ts), 'collective': int(coll), 'plan': int(plan),
+                    'timestamp': int(ts), 'collective': int(coll), 'plan': plan,
                     'rank': int(rank), 'channel': int(ch), 'peer': int(peer), 'direction': direction,
                     'request': int(request_id), 'qp': int(qp), 'wr_id': int(wr_id),
                     'opcode': int(opcode), 'status': int(status), 'phase': int(phase),

@@ -600,6 +600,23 @@ static inline ncclResult_t ncclIbRequestRetrieveFromCompletion(struct ncclIbNetC
   return ncclSuccess;
 }
 
+// Error CQEs only guarantee wr_id/qp_num/status. Resolve the owning request
+// without dereferencing optional opcode/imm_data fields.
+static inline ncclIbRequest* ncclIbRequestFromErrorCompletion(struct ncclIbNetCommBase* base, const ibv_wc* wc) {
+  if (base->isSend) {
+    int slot = int(wc->wr_id & 0xff);
+    if (slot < 0 || slot >= NET_IB_MAX_REQUESTS) return NULL;
+    return ((ncclIbSendComm*)base)->sendReqs[slot][0];
+  }
+  uint64_t index = wc->wr_id;
+  if (index >= NCCL_IB_FLUSH_REQ_WR_ID_OFFSET &&
+      index < NCCL_IB_FLUSH_REQ_WR_ID_OFFSET + NET_IB_MAX_REQUESTS) {
+    return base->reqs[index - NCCL_IB_FLUSH_REQ_WR_ID_OFFSET];
+  }
+  if (index >= NET_IB_MAX_REQUESTS) return NULL;
+  return ((ncclIbRecvComm*)base)->recvReqs[index];
+}
+
 static inline bool ncclIbRequestIsComplete(struct ncclIbRequest *request) {
   bool complete = (request->events[0] == 0 && request->events[1] == 0 && request->events[2] == 0 && request->events[3] == 0);
   if (!complete && request->base->resiliency) {
@@ -807,8 +824,9 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
       for (int w=0; w<wrDone; w++) {
         struct ibv_wc *wc = wcs+w;
         if (wc->status != IBV_WC_SUCCESS) {
-          if (r->telemetryContextValid) {
-            ncclTelemetryRecordRdmaRequest(&r->telemetryContext, r->id, wc->qp_num,
+          ncclIbRequest* errorReq = ncclIbRequestFromErrorCompletion(r->base, wc);
+          if (errorReq != NULL && errorReq->telemetryContextValid) {
+            ncclTelemetryRecordRdmaRequest(&errorReq->telemetryContext, errorReq->id, wc->qp_num,
               wc->wr_id, wc->opcode, wc->status, wc->byte_len, NCCL_TELEM_RDMA_CQE);
           }
           if (r->base->resiliency == NULL) {

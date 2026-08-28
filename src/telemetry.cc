@@ -206,12 +206,12 @@ void dump() {
               (unsigned long long)e.payloadBytes, (unsigned long long)e.trafficBytes);
       break;
     case NCCL_TELEM_RDMA_REQUEST:
-      fprintf(text, "[%llu ns] RDMA_REQUEST proxy=%llu coll=%llu plan=%llu rank=%u ch=%u "
+      fprintf(text, "[%llu ns] RDMA_REQUEST proxy=%llu coll=%llu plan=unavailable rank=%u ch=%u "
               "peer=%u direction=%s request=%llu qp=%u wr_id=%llu opcode=%u status=%u "
               "phase=%u bytes=%llu\n",
               (unsigned long long)e.timestampNs,
               (unsigned long long)e.planId,
-              (unsigned long long)e.collectiveId, 0ull,
+              (unsigned long long)e.collectiveId,
               e.rank, e.channel, e.algorithm,
               (e.collective & 0xff) == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
               (e.collective & 0xff) == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
