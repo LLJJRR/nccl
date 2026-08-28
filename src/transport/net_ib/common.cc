@@ -52,6 +52,18 @@ ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend)
     baseComm->activeQps[i] = &baseComm->qps[i];
     baseComm->qps[i].eceSupported = 0;
     baseComm->qps[i].ece = {0};
+    if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC) {
+      baseComm->qps[i].telemetrySqPostedWrs = 0;
+      baseComm->qps[i].telemetrySqCompletedWrs = 0;
+      baseComm->qps[i].telemetrySqPostedBytes = 0;
+      baseComm->qps[i].telemetrySqCompletedBytes = 0;
+      baseComm->qps[i].telemetrySqPendingWrs = 0;
+      baseComm->qps[i].telemetrySqPendingBytes = 0;
+      baseComm->qps[i].telemetryRqPostedWrs = 0;
+      baseComm->qps[i].telemetryRqCompletedWrs = 0;
+      baseComm->qps[i].telemetryRqPostedBytes = 0;
+      baseComm->qps[i].telemetryRqCompletedBytes = 0;
+    }
     memset(&baseComm->qps[i].initAttr, 0, sizeof(baseComm->qps[i].initAttr));
     memset(&baseComm->qps[i].rtrAttr, 0, sizeof(baseComm->qps[i].rtrAttr));
     memset(&baseComm->qps[i].rtsAttr, 0, sizeof(baseComm->qps[i].rtsAttr));

@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 import re, statistics, sys, json, argparse, os
 from collections import defaultdict, Counter
+
+def percentile(values, pct):
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = int(round((len(ordered) - 1) * pct))
+    return ordered[index]
 if len(sys.argv) < 2:
     print(f'usage: {sys.argv[0]} <telemetry.txt> [telemetry2.txt ...]', file=sys.stderr)
     sys.exit(2)
@@ -18,6 +25,36 @@ rdma_request = re.compile(
     r"(?:owner_index=(\d+) owner_count=(\d+) )?"
     r"(?:completion_expected=(\d+) )?bytes=(\d+)"
 )
+rdma_request_state = re.compile(
+    r"\[(\d+) ns\] RDMA_REQUEST_STATE request=(\d+) proxy=(\d+) rank=(\d+) ch=(\d+) "
+    r"type=(\d+) state=(\d+) expected_bytes=(\d+) posted_bytes=(\d+) completed_bytes=(\d+) "
+    r"wrs=(\d+) cqes=(\d+)"
+)
+rdma_wr = re.compile(
+    r"\[(\d+) ns\] RDMA_WR request=(\d+) proxy=(\d+) rank=(\d+) ch=(\d+) peer=(\d+) "
+    r"direction=(SEND|RECV|UNKNOWN) qp=(\d+) wr_id=(\d+) opcode=(\d+) send_flags=0x([0-9a-fA-F]+) "
+    r"num_sge=(\d+) total_sge_bytes=(\d+) remote_addr=0x([0-9a-fA-F]+) rkey=(\d+) imm_data=(\d+)"
+)
+rdma_sge = re.compile(
+    r"\[(\d+) ns\] RDMA_SGE request=(\d+) proxy=(\d+) rank=(\d+) ch=(\d+) peer=(\d+) "
+    r"direction=(SEND|RECV|UNKNOWN) qp=(\d+) wr_id=(\d+) sge_index=(\d+) addr=0x([0-9a-fA-F]+) "
+    r"length=(\d+) lkey=(\d+)"
+)
+rdma_qp_depth = re.compile(
+    r"\[(\d+) ns\] RDMA_QP_DEPTH request=(\d+) proxy=(\d+) rank=(\d+) ch=(\d+) peer=(\d+) "
+    r"direction=(SEND|RECV|UNKNOWN) qp=(\d+) phase=(\d+) outstanding_wrs=(\d+) "
+    r"posted_bytes=(\d+) completed_bytes=(\d+) posted_wrs=(\d+) completed_wrs=(\d+)"
+)
+rdma_cq_poll = re.compile(
+    r"\[(\d+) ns\] RDMA_CQ_POLL request=(\d+) proxy=(\d+) rank=(\d+) ch=(\d+) "
+    r"cq_id=(0x[0-9a-fA-F]+) window_start_ns=(\d+) poll_calls=(\d+) empty_polls=(\d+) "
+    r"returned_cqes=(\d+) busy_ns=(\d+)"
+)
+rdma_cqe_detail = re.compile(
+    r"\[(\d+) ns\] RDMA_CQE_DETAIL request=(\d+) proxy=(\d+) rank=(\d+) ch=(\d+) peer=(\d+) "
+    r"direction=(SEND|RECV|UNKNOWN) qp=(\d+) wr_id=(\d+) opcode=(\d+) status=(\d+) "
+    r"vendor_err=(\d+) src_qp=(\d+) wc_flags=0x([0-9a-fA-F]+) imm_data=(\d+) byte_len=(\d+)"
+)
 events, transports = defaultdict(dict), Counter()
 headers = []
 transport_edges = defaultdict(lambda: {'count': 0, 'channels': set(), 'conn': set()})
@@ -32,6 +69,12 @@ summaries = []
 host_times = defaultdict(list)
 proxy_events = defaultdict(list)
 rdma_events = defaultdict(list)
+rdma_states = defaultdict(list)
+rdma_wrs = defaultdict(list)
+rdma_sges = defaultdict(list)
+rdma_depths = defaultdict(list)
+rdma_polls = defaultdict(list)
+rdma_cqe_details = defaultdict(list)
 for path in sys.argv[1:]:
     with open(path, errors="replace") as f:
         for line in f:
@@ -79,6 +122,49 @@ for path in sys.argv[1:]:
                     'completion_expected': int(completion_expected) if completion_expected is not None else 1,
                     'bytes': int(bytes_)
                 })
+            m = rdma_request_state.search(line)
+            if m:
+                ts, request_id, proxy_id, rank, ch, typ, state, expected, posted, completed, wrs, cqes = map(int, m.groups())
+                rdma_states[(rank, proxy_id, request_id)].append({
+                    'timestamp': ts, 'channel': ch, 'type': typ, 'state': state,
+                    'expected': expected, 'posted': posted, 'completed': completed,
+                    'wrs': wrs, 'cqes': cqes})
+            m = rdma_wr.search(line)
+            if m:
+                ts, request_id, proxy_id, rank, ch, peer, direction, qp, wr_id, opcode, flags, num_sge, total, remote, rkey, imm = m.groups()
+                rdma_wrs[(int(rank), int(proxy_id), int(request_id))].append({
+                    'timestamp': int(ts), 'channel': int(ch), 'peer': int(peer),
+                    'direction': direction, 'qp': int(qp), 'wr_id': int(wr_id),
+                    'opcode': int(opcode), 'flags': int(flags, 16), 'num_sge': int(num_sge),
+                    'total': int(total), 'remote': int(remote, 16), 'rkey': int(rkey), 'imm': int(imm)})
+            m = rdma_sge.search(line)
+            if m:
+                ts, request_id, proxy_id, rank, ch, peer, direction, qp, wr_id, idx, addr, length, lkey = m.groups()
+                rdma_sges[(int(rank), int(proxy_id), int(request_id))].append({
+                    'timestamp': int(ts), 'qp': int(qp), 'wr_id': int(wr_id), 'index': int(idx),
+                    'addr': int(addr, 16), 'length': int(length), 'lkey': int(lkey)})
+            m = rdma_qp_depth.search(line)
+            if m:
+                ts, request_id, proxy_id, rank, ch, peer, direction, qp, phase, outstanding, posted_b, completed_b, posted_w, completed_w = m.groups()
+                rdma_depths[(int(rank), int(proxy_id), int(request_id))].append({
+                    'timestamp': int(ts), 'qp': int(qp), 'phase': int(phase),
+                    'outstanding': int(outstanding), 'posted_bytes': int(posted_b),
+                    'completed_bytes': int(completed_b), 'posted_wrs': int(posted_w),
+                    'completed_wrs': int(completed_w)})
+            m = rdma_cq_poll.search(line)
+            if m:
+                ts, request_id, proxy_id, rank, ch, cq_id, start, calls, empty, returned, busy = m.groups()
+                rdma_polls[(int(rank), int(proxy_id), int(request_id))].append({
+                    'timestamp': int(ts), 'cq_id': cq_id, 'start': int(start), 'calls': int(calls),
+                    'empty': int(empty), 'returned': int(returned), 'busy': int(busy)})
+            m = rdma_cqe_detail.search(line)
+            if m:
+                ts, request_id, proxy_id, rank, ch, peer, direction, qp, wr_id, opcode, status, vendor, src_qp, flags, imm, byte_len = m.groups()
+                rdma_cqe_details[(int(rank), int(proxy_id), int(request_id))].append({
+                    'timestamp': int(ts), 'qp': int(qp), 'wr_id': int(wr_id),
+                    'opcode': int(opcode), 'status': int(status), 'vendor': int(vendor),
+                    'src_qp': int(src_qp), 'flags': int(flags, 16), 'imm': int(imm),
+                    'byte_len': int(byte_len)})
             m = re.search(r"TRANSPORT rank=(\d+) peer=(\d+) ch=(\d+) conn=(\d+)(?: direction=(SEND|RECV))? type=(\w+) path=(\w+) path_type=(\d+)", line)
             if m:
                 rank, peer, ch, conn, direction, typ, path, path_type = m.groups()
@@ -142,6 +228,86 @@ if headers:
     print(f'trace_headers={len(headers)} levels={levels} dropped_events={dropped}')
     if dropped:
         print(f'diagnostic=telemetry_events_dropped:count={dropped}')
+if rdma_states:
+    print(f'rdma_requests={len(rdma_states)}')
+    all_completion_latencies = []
+    for key, states in sorted(rdma_states.items()):
+        rank, proxy_id, request_id = key
+        by_state = {}
+        for event in states:
+            by_state.setdefault(event['state'], event)
+        latest = max(states, key=lambda event: event['timestamp'])
+        wrs = rdma_wrs.get(key, [])
+        sges = rdma_sges.get(key, [])
+        depths = rdma_depths.get(key, [])
+        polls = rdma_polls.get(key, [])
+        cqes = rdma_cqe_details.get(key, [])
+        fields = [f'request={request_id}', f'proxy={proxy_id}', f'rank={rank}',
+                  f'channel={latest["channel"]}', f'type={latest["type"]}',
+                  f'expected_bytes={latest["expected"]}', f'posted_bytes={latest["posted"]}',
+                  f'completed_bytes={latest["completed"]}', f'wrs={len(wrs)}',
+                  f'sges={len(sges)}', f'sge_bytes={sum(sge["length"] for sge in sges)}',
+                  f'cqes={len(cqes)}']
+        phase_names = ((0, 1, 'create_to_ready_ns'), (1, 2, 'ready_to_post_begin_ns'),
+                       (2, 3, 'post_begin_to_end_ns'))
+        for begin, end, name in phase_names:
+            if begin in by_state and end in by_state:
+                fields.append(f'{name}={by_state[end]["timestamp"]-by_state[begin]["timestamp"]}')
+        if 3 in by_state and cqes:
+            fields.append(f'post_end_to_first_cqe_ns={min(c["timestamp"] for c in cqes)-by_state[3]["timestamp"]}')
+        if cqes:
+            first_cqe, last_cqe = min(c['timestamp'] for c in cqes), max(c['timestamp'] for c in cqes)
+            fields.append(f'first_to_last_cqe_ns={last_cqe-first_cqe}')
+            if 4 in by_state:
+                fields.append(f'last_cqe_to_complete_ns={by_state[4]["timestamp"]-last_cqe}')
+        opcode_counts = Counter(wr['opcode'] for wr in wrs)
+        if opcode_counts: fields.append('opcodes=' + ','.join(f'{op}:{count}' for op, count in sorted(opcode_counts.items())))
+        if depths:
+            fields.append(f'max_outstanding_wrs={max(depth["outstanding"] for depth in depths)}')
+            fields.append(f'max_outstanding_bytes={max(max(0, depth["posted_bytes"]-depth["completed_bytes"]) for depth in depths)}')
+        poll_calls = sum(poll['calls'] for poll in polls)
+        empty_polls = sum(poll['empty'] for poll in polls)
+        returned_cqes = sum(poll['returned'] for poll in polls)
+        if polls:
+            fields.extend((f'poll_calls={poll_calls}', f'empty_poll_ratio={empty_polls/max(1, poll_calls):.3f}',
+                           f'polled_cqes={returned_cqes}', f'poll_busy_ns={sum(poll["busy"] for poll in polls)}',
+                           f'max_cqe_batch={max(poll["returned"] for poll in polls)}'))
+        post_times = defaultdict(list)
+        for wr in wrs:
+            if wr['flags'] & 2:
+                post_times[(wr['qp'], wr['wr_id'])].append(wr['timestamp'])
+        latencies = []
+        for cqe in cqes:
+            post_key = (cqe['qp'], cqe['wr_id'])
+            if post_times[post_key]:
+                latencies.append(cqe['timestamp'] - post_times[post_key].pop(0))
+        all_completion_latencies.extend(latencies)
+        if latencies:
+            fields.extend((f'cqe_latency_avg_ns={statistics.mean(latencies):.1f}',
+                           f'cqe_latency_p50_ns={percentile(latencies, .50)}',
+                           f'cqe_latency_p95_ns={percentile(latencies, .95)}',
+                           f'cqe_latency_p99_ns={percentile(latencies, .99)}',
+                           f'cqe_latency_max_ns={max(latencies)}'))
+        diagnostics = []
+        if 0 in by_state and 1 not in by_state: diagnostics.append('request_not_ready')
+        if 2 in by_state and 3 in by_state and by_state[3]['timestamp']-by_state[2]['timestamp'] > 1000000:
+            diagnostics.append('verbs_post_slow')
+        if 3 in by_state and 4 not in by_state and not polls: diagnostics.append('cq_not_polled')
+        if polls and empty_polls and not cqes: diagnostics.append('cq_polled_no_completion')
+        if cqes and 4 not in by_state: diagnostics.append('cqe_returned_request_not_complete')
+        if any(cqe['status'] or cqe['vendor'] for cqe in cqes): diagnostics.append('rdma_wc_or_vendor_error')
+        if depths and latest['expected'] >= 1048576 and max(depth['outstanding'] for depth in depths) <= 1:
+            diagnostics.append('low_qp_feed_candidate')
+        if diagnostics: fields.append('diagnostics=' + ','.join(diagnostics))
+        print('  rdma_request=' + ' '.join(fields))
+    if all_completion_latencies:
+        print('rdma_cqe_latency_ns=' + ' '.join((
+            f'count={len(all_completion_latencies)}',
+            f'avg={statistics.mean(all_completion_latencies):.1f}',
+            f'p50={percentile(all_completion_latencies, .50)}',
+            f'p95={percentile(all_completion_latencies, .95)}',
+            f'p99={percentile(all_completion_latencies, .99)}',
+            f'max={max(all_completion_latencies)}')))
 if proxy_events:
     print(f'proxy_operations={len(proxy_events)}')
     for (proxy_rank, proxy_id), entries in sorted(proxy_events.items()):

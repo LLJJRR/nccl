@@ -24,7 +24,13 @@ enum ncclTelemetryEventType : uint16_t {
   NCCL_TELEM_CHANNEL_SUMMARY = 13,
   NCCL_TELEM_NET_PATH = 14,
   NCCL_TELEM_PROXY_PROGRESS = 15,
-  NCCL_TELEM_RDMA_REQUEST = 16
+  NCCL_TELEM_RDMA_REQUEST = 16,
+  NCCL_TELEM_RDMA_REQUEST_STATE = 17,
+  NCCL_TELEM_RDMA_WR = 18,
+  NCCL_TELEM_RDMA_SGE = 19,
+  NCCL_TELEM_RDMA_QP_DEPTH = 20,
+  NCCL_TELEM_RDMA_CQ_POLL = 21,
+  NCCL_TELEM_RDMA_CQE_DETAIL = 22
 };
 
 enum ncclTelemetryLevel : uint8_t {
@@ -59,6 +65,14 @@ enum ncclTelemetryRdmaPhase : uint8_t {
   NCCL_TELEM_RDMA_CQE = 1,
   NCCL_TELEM_RDMA_REQUEST_COMPLETE = 2,
   NCCL_TELEM_RDMA_POLL_DELAY = 3
+};
+
+enum ncclTelemetryRdmaRequestState : uint8_t {
+  NCCL_TELEM_RDMA_REQUEST_CREATE = 0,
+  NCCL_TELEM_RDMA_REQUEST_READY = 1,
+  NCCL_TELEM_RDMA_REQUEST_POST_BEGIN = 2,
+  NCCL_TELEM_RDMA_REQUEST_POST_END = 3,
+  NCCL_TELEM_RDMA_STATE_COMPLETE = 4
 };
 
 struct ncclTelemetryNetRequestContext {
@@ -129,6 +143,34 @@ void ncclTelemetryRecordRdmaRequest(const ncclTelemetryNetRequestContext* contex
                                     uint32_t opcode, uint32_t status, uint64_t bytes,
                                     uint32_t phase, uint32_t ownerIndex,
                                     uint32_t ownerCount, bool completionExpected);
+void ncclTelemetryRecordRdmaRequestState(const ncclTelemetryNetRequestContext* context,
+                                         uint64_t requestId, uint32_t requestType,
+                                         uint32_t state, uint64_t expectedBytes,
+                                         uint64_t postedBytes, uint64_t completedBytes,
+                                         uint32_t wrCount, uint32_t cqeCount);
+void ncclTelemetryRecordRdmaWr(const ncclTelemetryNetRequestContext* context,
+                               uint64_t requestId, uint64_t proxyId, uint32_t qpNum,
+                               uint64_t wrId, uint32_t opcode, uint32_t sendFlags,
+                               uint32_t numSge, uint64_t totalSgeBytes,
+                               uint64_t remoteAddr, uint32_t rkey, uint32_t immData);
+void ncclTelemetryRecordRdmaSge(const ncclTelemetryNetRequestContext* context,
+                                uint64_t requestId, uint64_t proxyId, uint32_t qpNum,
+                                uint64_t wrId, uint32_t sgeIndex, uint64_t addr,
+                                uint32_t length, uint32_t lkey);
+void ncclTelemetryRecordRdmaQpDepth(const ncclTelemetryNetRequestContext* context,
+                                    uint64_t requestId, uint64_t proxyId, uint32_t qpNum,
+                                    uint32_t phase, uint32_t outstandingWrs,
+                                    uint64_t postedBytes, uint64_t completedBytes,
+                                    uint32_t postedWrs, uint32_t completedWrs);
+void ncclTelemetryRecordRdmaCqPoll(const ncclTelemetryNetRequestContext* context,
+                                   uint64_t requestId, uint64_t cqId, uint64_t windowStartNs,
+                                   uint64_t pollCalls, uint64_t emptyPolls,
+                                   uint64_t returnedCqes, uint64_t busyNs);
+void ncclTelemetryRecordRdmaCqeDetail(const ncclTelemetryNetRequestContext* context,
+                                      uint64_t requestId, uint32_t qpNum, uint64_t wrId,
+                                      uint32_t opcode, uint32_t status, uint32_t vendorErr,
+                                      uint32_t srcQp, uint32_t wcFlags, uint32_t immData,
+                                      uint32_t byteLen);
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport,
                                   int direction, int pathType);
 void ncclTelemetryRecordNetPath(int rank, int peer, int channel, int connIndex, int direction,

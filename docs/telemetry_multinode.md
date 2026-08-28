@@ -187,3 +187,57 @@ if an OFF run unexpectedly emits traces, or if nccl-tests reports a non-zero
 wrong-result count. Reports surface ring-buffer drops, unmatched signaled WQEs,
 WC errors, and non-zero retry/error/congestion-related NIC counters rather than
 silently treating a partial trace as complete.
+
+## Detailed verbs datapath (Level 2)
+
+The in-tree IB backend exposes the following diagnostic-only chain:
+
+```text
+proxy op -> ncclIbRequest -> WR -> SGE -> QP depth -> CQ poll -> CQE -> request completion
+```
+
+`RDMA_REQUEST_STATE` records `CREATE`, `READY`, `POST_BEGIN`, `POST_END`, and
+`COMPLETE`, together with expected, posted, and completed bytes and cumulative
+WR/CQE counts. The report derives request construction, submit, first-CQE,
+CQE-tail, and post-CQE bookkeeping intervals from these events.
+
+`RDMA_WR` records QP, `wr_id`, opcode, send flags, SGE count, remote address,
+rkey, immediate data, and total SGE bytes. `RDMA_SGE` records every SGE address,
+length, and lkey. These records are emitted only at level 2. Addresses and keys
+are diagnostic process data and traces should be handled as sensitive artifacts.
+
+`RDMA_QP_DEPTH` maintains separate SQ and RQ cumulative posted/completed WR and
+byte counters. For an SQ, a signaled CQE retires that WR and the preceding
+unsignaled batch. Unsignaled WRs therefore do not produce false "missing CQE"
+diagnostics. NCCL's receive WR has zero SGEs because payload arrives through a
+remote RDMA write, so RQ outstanding bytes are unavailable even though RQ WR
+depth is exact. The receive CTS SQ is recorded at WR/SGE granularity, but is not
+assigned exact request-owned depth because an occasional signaled CTS can retire
+work from already-reused receive requests.
+
+`RDMA_CQ_POLL` aggregates polling instead of recording every empty call. It
+emits the first poll, every non-empty poll, each 64-empty-poll window, and any
+remaining window at request completion. `cq_id` is the low 32 bits of the CQ
+pointer and is process-local; standard verbs does not provide a portable CQ
+number. Poll activity is attributed to the request whose `test()` call drove
+the shared CQ, while each returned CQE remains associated with its actual owner.
+
+`RDMA_CQE_DETAIL` records status, opcode, byte length, vendor error, source QP,
+WC flags, and immediate data. On error CQEs only `wr_id`, QP, status, and vendor
+error are treated as valid; optional successful-completion fields are zeroed.
+Grouped receive and grouped send associations retain every real proxy owner but
+do not claim that duplicated associations represent additional physical CQEs.
+
+The report includes per-request lifecycle intervals, opcode/SGE totals,
+per-QP peak outstanding WRs/bytes, poll calls and empty ratio, CQE batch sizes,
+poll busy time, and CQE latency avg/p50/p95/p99/max. It can surface
+`request_not_ready`, `verbs_post_slow`, `cq_not_polled`,
+`cq_polled_no_completion`, `cqe_returned_request_not_complete`, and WC/vendor
+errors. `low_qp_feed_candidate` is deliberately a candidate diagnosis because
+small transfers can legitimately keep only one WR outstanding.
+
+Limitations are explicit: pre-posted receive queues expose exact CQE and global
+RQ depth but not a one-to-one request post timestamp; Socket and third-party NET
+plugins do not expose internal verbs objects; cross-node monotonic-clock
+calibration is deferred. This boundary intentionally excludes mlx5 DV/DevX,
+doorbells, packet PSNs, and NIC firmware internals.

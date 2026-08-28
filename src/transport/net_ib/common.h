@@ -206,6 +206,25 @@ struct ncclIbRequest {
   uint64_t id;
   ncclTelemetryNetRequestContext telemetryContexts[NCCL_NET_IB_MAX_RECVS];
   uint8_t telemetryContextCount;
+  // Level-2 request lifecycle and completion accounting. These fields are
+  // deliberately kept out of the Level-0/1 hot path.
+  uint64_t telemetryExpectedBytes;
+  uint64_t telemetryPostedBytes;
+  uint64_t telemetryCompletedBytes;
+  uint32_t telemetryWrCount;
+  uint32_t telemetryCqeCount;
+  uint64_t telemetryFirstCqeNs;
+  uint64_t telemetryLastCqeNs;
+  uint64_t telemetryPollWindowStartNs[NCCL_IB_MAX_DEVS_PER_NIC];
+  uint64_t telemetryPollBusyNs[NCCL_IB_MAX_DEVS_PER_NIC];
+  uint32_t telemetryPollCalls[NCCL_IB_MAX_DEVS_PER_NIC];
+  uint32_t telemetryPollEmpty[NCCL_IB_MAX_DEVS_PER_NIC];
+  uint32_t telemetryPollReturned[NCCL_IB_MAX_DEVS_PER_NIC];
+  uint8_t telemetryPollSeen[NCCL_IB_MAX_DEVS_PER_NIC];
+  uint32_t telemetryRetireQpNum[MAX_QPS_PER_REQ];
+  uint32_t telemetryRetireWrs[MAX_QPS_PER_REQ];
+  uint64_t telemetryRetireBytes[MAX_QPS_PER_REQ];
+  uint8_t telemetryRetireCount;
   int nreqs;
   union {
     struct {
@@ -294,6 +313,19 @@ struct ncclIbQp {
   // The index of the device on the remote side to which this QP is connected
   // to.
   int remDevIdx;
+  // Cumulative SQ/RQ counters used to expose outstanding work. A signaled
+  // completion retires the whole preceding unsignaled batch, matching verbs
+  // send-queue semantics.
+  uint64_t telemetrySqPostedWrs;
+  uint64_t telemetrySqCompletedWrs;
+  uint64_t telemetrySqPostedBytes;
+  uint64_t telemetrySqCompletedBytes;
+  uint64_t telemetrySqPendingWrs;
+  uint64_t telemetrySqPendingBytes;
+  uint64_t telemetryRqPostedWrs;
+  uint64_t telemetryRqCompletedWrs;
+  uint64_t telemetryRqPostedBytes;
+  uint64_t telemetryRqCompletedBytes;
 };
 
 // We need to support NCCL_NET_MAX_REQUESTS for each concurrent receive

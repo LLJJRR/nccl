@@ -1098,6 +1098,14 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
           rCommDev->base.pd);
 
       ncclIbQp* flushQp = &rCommDev->gpuFlush.qp;
+      if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC) {
+        flushQp->telemetrySqPostedWrs = 0;
+        flushQp->telemetrySqCompletedWrs = 0;
+        flushQp->telemetrySqPostedBytes = 0;
+        flushQp->telemetrySqCompletedBytes = 0;
+        flushQp->telemetrySqPendingWrs = 0;
+        flushQp->telemetrySqPendingBytes = 0;
+      }
 
       // Transition the QP to INIT state
       struct ncclIbQpInitAttr* initAttr = &flushQp->initAttr;
@@ -1143,6 +1151,9 @@ ncclResult_t ncclIbPostReceiveWorkRequestsOnQp(struct ncclIbRecvComm* recvComm, 
   INFO(NCCL_NET, "NET/IB: %s: Pre-posting %d Receive WQEs on QP (qp_num=%d, comm=%p)", __func__, nRecvWorkRequestsPerQp, dataQp->qp->qp_num, recvComm);
   for (int j = 0; j < nRecvWorkRequestsPerQp; j++) {
     NCCLCHECK(ncclIbPostRecvWorkRequest(dataQp->qp, &recvComm->ibRecvWorkRequest));
+  }
+  if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC) {
+    dataQp->telemetryRqPostedWrs += nRecvWorkRequestsPerQp;
   }
   return ncclSuccess;
 }

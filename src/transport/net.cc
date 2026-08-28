@@ -1516,6 +1516,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
   if (args->state == ncclProxyOpProgress) {
     int p = args->protocol;
     int maxDepth = std::min(NCCL_STEPS, NCCL_SHARED_STEPS/args->nsubs);
+    bool telemetryRdma = ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC;
     for (int s=0; s<args->nsubs; s+=args->subs[s].groupSize) {
       struct ncclProxySubArgs* subGroup = args->subs+s;
       int subCount = 0;
@@ -1525,7 +1526,6 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
       void* mhandles[NCCL_PROXY_MAX_SUBS];
       void* phandles[NCCL_PROXY_MAX_SUBS];
       ncclTelemetryNetRequestContext telemetryContexts[NCCL_PROXY_MAX_SUBS];
-      bool telemetryRdma = ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC;
       for (int i=0; i<subGroup->groupSize; i++) {
         struct ncclProxySubArgs* sub = subGroup + i;
         int postedStepId = sub->posted;
@@ -1651,6 +1651,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
 #endif
             } else {
               int subCount = 0;
+              ncclTelemetryNetRequestContext flushTelemetryContexts[NCCL_PROXY_MAX_SUBS];
               for (int i=0; i<subGroup->groupSize; i++) {
                 struct ncclProxySubArgs* sub = subGroup + i;
                 if (step < sub->nsteps) {
@@ -1668,11 +1669,20 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
                     }
                   }
                   mhandles[subCount] = sub->recvMhandle;
+                  if (telemetryRdma) flushTelemetryContexts[subCount] = {
+                    sub->telemetryProxyId, sub->telemetryCollectiveId, sub->telemetryPlanId,
+                    proxyState->comm->rank, sub->channelId, sub->peer,
+                    NCCL_TELEM_DIRECTION_RECV};
                   subCount++;
                 }
               }
               struct recvNetResources* resources = (struct recvNetResources*) (subGroup->connection->transportResources);
-              NCCLCHECK(proxyState->ncclNet->iflush(resources->netRecvComm, subCount, ptrs, sizes, mhandles, subGroup->requests+(step%NCCL_STEPS)));
+              if (telemetryRdma)
+                ncclTelemetrySetNetRequestContexts(flushTelemetryContexts, subCount);
+              ncclResult_t flushResult = proxyState->ncclNet->iflush(resources->netRecvComm,
+                subCount, ptrs, sizes, mhandles, subGroup->requests+(step%NCCL_STEPS));
+              if (telemetryRdma) ncclTelemetryClearNetRequestContext();
+              NCCLCHECK(flushResult);
             }
           }
           args->idle = 0;

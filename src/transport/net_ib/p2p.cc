@@ -12,6 +12,7 @@
 #include "telemetry.h"
 
 #include <atomic>
+#include <ctime>
 
 NCCL_PARAM(IbArThreshold, "IB_AR_THRESHOLD", -2);
 int64_t ncclIbArThreshold = 8192;
@@ -37,6 +38,101 @@ static inline void ncclIbRecordRequestTelemetry(struct ncclIbRequest* request,
   }
 }
 
+static inline uint64_t ncclIbTelemetryNowNs() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+}
+
+static inline bool ncclIbTelemetryDetailed(const struct ncclIbRequest* request) {
+  return request->telemetryContextCount != 0 &&
+         ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC;
+}
+
+static inline void ncclIbRecordRequestState(struct ncclIbRequest* request, uint32_t state) {
+  if (!ncclIbTelemetryDetailed(request)) return;
+  for (int i = 0; i < request->telemetryContextCount; ++i) {
+    ncclTelemetryRecordRdmaRequestState(request->telemetryContexts + i, request->id,
+      request->type, state, request->telemetryExpectedBytes, request->telemetryPostedBytes,
+      request->telemetryCompletedBytes, request->telemetryWrCount,
+      request->telemetryCqeCount);
+  }
+}
+
+static inline void ncclIbRecordWr(struct ncclIbRequest* request, uint32_t qpNum,
+                                  const struct ibv_send_wr* wr) {
+  if (!ncclIbTelemetryDetailed(request) || wr == NULL) return;
+  uint64_t bytes = 0;
+  for (int s = 0; s < wr->num_sge; ++s) bytes += wr->sg_list[s].length;
+  for (int i = 0; i < request->telemetryContextCount; ++i) {
+    const ncclTelemetryNetRequestContext* context = request->telemetryContexts + i;
+    ncclTelemetryRecordRdmaWr(context, request->id, context->proxyId, qpNum, wr->wr_id,
+      wr->opcode, wr->send_flags, wr->num_sge, bytes, wr->wr.rdma.remote_addr,
+      wr->wr.rdma.rkey, wr->imm_data);
+    for (int s = 0; s < wr->num_sge; ++s) {
+      ncclTelemetryRecordRdmaSge(context, request->id, context->proxyId, qpNum,
+        wr->wr_id, s, wr->sg_list[s].addr, wr->sg_list[s].length,
+        wr->sg_list[s].lkey);
+    }
+  }
+  request->telemetryPostedBytes += bytes;
+  request->telemetryWrCount++;
+}
+
+static inline void ncclIbRecordQpDepth(struct ncclIbRequest* request,
+                                       struct ncclIbQp* qp, uint32_t phase,
+                                       bool receiveQueue) {
+  if (!ncclIbTelemetryDetailed(request) || qp == NULL || qp->qp == NULL) return;
+  uint64_t postedWrs = receiveQueue ? qp->telemetryRqPostedWrs : qp->telemetrySqPostedWrs;
+  uint64_t completedWrs = receiveQueue ? qp->telemetryRqCompletedWrs : qp->telemetrySqCompletedWrs;
+  uint64_t postedBytes = receiveQueue ? qp->telemetryRqPostedBytes : qp->telemetrySqPostedBytes;
+  uint64_t completedBytes = receiveQueue ? qp->telemetryRqCompletedBytes : qp->telemetrySqCompletedBytes;
+  uint64_t outstandingWrs = postedWrs >= completedWrs ? postedWrs - completedWrs : 0;
+  uint32_t outstanding = uint32_t(std::min<uint64_t>(outstandingWrs, UINT32_MAX));
+  for (int i = 0; i < request->telemetryContextCount; ++i) {
+    const ncclTelemetryNetRequestContext* context = request->telemetryContexts + i;
+    ncclTelemetryRecordRdmaQpDepth(context, request->id, context->proxyId, qp->qp->qp_num,
+      phase, outstanding, postedBytes, completedBytes, uint32_t(postedWrs),
+      uint32_t(completedWrs));
+  }
+}
+
+static inline void ncclIbTrackSqBatch(struct ncclIbRequest* request,
+                                      struct ncclIbQp* qp, uint32_t wrs,
+                                      uint64_t bytes) {
+  if (!ncclIbTelemetryDetailed(request)) return;
+  qp->telemetrySqPostedWrs += wrs;
+  qp->telemetrySqPostedBytes += bytes;
+  qp->telemetrySqPendingWrs += wrs;
+  qp->telemetrySqPendingBytes += bytes;
+  if (request->telemetryRetireCount < MAX_QPS_PER_REQ) {
+    int i = request->telemetryRetireCount++;
+    request->telemetryRetireQpNum[i] = qp->qp->qp_num;
+    request->telemetryRetireWrs[i] = uint32_t(qp->telemetrySqPendingWrs);
+    request->telemetryRetireBytes[i] = qp->telemetrySqPendingBytes;
+    qp->telemetrySqPendingWrs = 0;
+    qp->telemetrySqPendingBytes = 0;
+  }
+  ncclIbRecordQpDepth(request, qp, NCCL_TELEM_RDMA_WQE_POST, false);
+}
+
+static inline void ncclIbFlushPollTelemetry(struct ncclIbRequest* request, int devIndex,
+                                            struct ibv_cq* cq) {
+  if (!ncclIbTelemetryDetailed(request) || request->telemetryPollCalls[devIndex] == 0) return;
+  uint64_t cqId = uint64_t(uintptr_t(cq));
+  for (int i = 0; i < request->telemetryContextCount; ++i) {
+    ncclTelemetryRecordRdmaCqPoll(request->telemetryContexts + i, request->id, cqId,
+      request->telemetryPollWindowStartNs[devIndex], request->telemetryPollCalls[devIndex],
+      request->telemetryPollEmpty[devIndex], request->telemetryPollReturned[devIndex],
+      request->telemetryPollBusyNs[devIndex]);
+  }
+  request->telemetryPollWindowStartNs[devIndex] = 0;
+  request->telemetryPollBusyNs[devIndex] = 0;
+  request->telemetryPollCalls[devIndex] = 0;
+  request->telemetryPollEmpty[devIndex] = 0;
+  request->telemetryPollReturned[devIndex] = 0;
+}
+
 ncclResult_t ncclIbGetRequest(struct ncclIbNetCommBase* base, struct ncclIbRequest** req) {
   for (int i=0; i<NET_IB_MAX_REQUESTS; i++) {
     struct ncclIbRequest* r = base->reqs+i;
@@ -47,6 +143,22 @@ ncclResult_t ncclIbGetRequest(struct ncclIbNetCommBase* base, struct ncclIbReque
       memset(r->events, 0, sizeof(r->events));
       r->telemetryContextCount = uint8_t(ncclTelemetryGetNetRequestContexts(
         r->telemetryContexts, NCCL_NET_IB_MAX_RECVS));
+      if (r->telemetryContextCount != 0) {
+        r->telemetryExpectedBytes = 0;
+        r->telemetryPostedBytes = 0;
+        r->telemetryCompletedBytes = 0;
+        r->telemetryWrCount = 0;
+        r->telemetryCqeCount = 0;
+        r->telemetryFirstCqeNs = 0;
+        r->telemetryLastCqeNs = 0;
+        r->telemetryRetireCount = 0;
+        memset(r->telemetryPollWindowStartNs, 0, sizeof(r->telemetryPollWindowStartNs));
+        memset(r->telemetryPollBusyNs, 0, sizeof(r->telemetryPollBusyNs));
+        memset(r->telemetryPollCalls, 0, sizeof(r->telemetryPollCalls));
+        memset(r->telemetryPollEmpty, 0, sizeof(r->telemetryPollEmpty));
+        memset(r->telemetryPollReturned, 0, sizeof(r->telemetryPollReturned));
+        memset(r->telemetryPollSeen, 0, sizeof(r->telemetryPollSeen));
+      }
       *req = r;
       return ncclSuccess;
     }
@@ -115,6 +227,7 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
   volatile struct ncclIbSendFifo* slots = comm->ctsFifo[slot];
   int nreqs = slots[0].nreqs;
   if (nreqs > NCCL_NET_IB_MAX_RECVS) return ncclInternalError;
+  for (int r = 0; r < nreqs; ++r) ncclIbRecordRequestState(reqs[r], NCCL_TELEM_RDMA_REQUEST_POST_BEGIN);
 
   TRACE(NCCL_NET, "NET/IB: %s: Posting a send request (req=%p, comm=%p, id=%ld, slot=%d, nreqs=%d)", __func__, reqs[0], reqs[0]->base, reqs[0]->id, slot, nreqs);
 
@@ -257,7 +370,12 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
     }
 #endif // ENABLE_TRACE
     NCCLCHECK(wrap_ibv_post_send(qp->qp, comm->wrs, &bad_wr));
+    uint32_t postedWrs = 0;
+    uint64_t postedBytes = 0;
     for (int r = 0; r < nreqs; r++) {
+      ncclIbRecordWr(reqs[r], qp->qp->qp_num, comm->wrs + r);
+      postedWrs++;
+      if (comm->wrs[r].sg_list) postedBytes += comm->wrs[r].sg_list->length;
       if (reqs[r]->telemetryContextCount != 0) {
         ncclIbRecordRequestTelemetry(reqs[r], qp->qp->qp_num, comm->wrs[r].wr_id,
           comm->wrs[r].opcode, 0,
@@ -267,11 +385,15 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
       }
     }
     if (reqs[0]->telemetryContextCount != 0 && lastWr != comm->wrs + nreqs - 1) {
+      ncclIbRecordWr(reqs[0], qp->qp->qp_num, lastWr);
+      postedWrs++;
+      if (lastWr->sg_list) postedBytes += lastWr->sg_list->length;
       ncclIbRecordRequestTelemetry(reqs[0], qp->qp->qp_num, lastWr->wr_id,
         lastWr->opcode, 0,
         lastWr->sg_list ? lastWr->sg_list->length : 0, NCCL_TELEM_RDMA_WQE_POST,
         (lastWr->send_flags & IBV_SEND_SIGNALED) != 0);
     }
+    ncclIbTrackSqBatch(reqs[0], qp, postedWrs, postedBytes);
 
     // Update the send offset and addresses for the next QP according to the
     // actual data size that was sent on the current QP, for every request
@@ -283,6 +405,8 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
       reqs[r]->send.sentData[qpIndex] = true;
     }
   }
+
+  for (int r = 0; r < nreqs; ++r) ncclIbRecordRequestState(reqs[r], NCCL_TELEM_RDMA_REQUEST_POST_END);
 
   TRACE(NCCL_NET, "NET/IB: %s: Send request posted (req=%p, comm=%p, id=%ld, slot=%d, nreqs=%d, wr_id=%ld)", __func__, reqs[0], reqs[0]->base, reqs[0]->id, slot, nreqs, wr_id);
 
@@ -336,6 +460,8 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
     req->nreqs = nreqs;
     req->send.size = size;
     req->send.data = data;
+    if (ncclIbTelemetryDetailed(req)) req->telemetryExpectedBytes = size;
+    ncclIbRecordRequestState(req, NCCL_TELEM_RDMA_REQUEST_CREATE);
     if (comm->base.resiliency) {
       memset(req->send.sentData, 0, sizeof(req->send.sentData));
     }
@@ -356,6 +482,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
     for (int i = 0; i < comm->base.vProps.ndevs; i++) {
       req->send.lkeys[i] = mhandleWrapper->mrs[i]->lkey;
     }
+    ncclIbRecordRequestState(req, NCCL_TELEM_RDMA_REQUEST_READY);
 
     // In case the sender will write the size of the send directly to the
     // receiver's memory, prepare the source buffer which will hold the sizes
@@ -436,6 +563,10 @@ ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, struct ncclIbRequest* r
 
   struct ibv_send_wr* bad_wr;
   NCCLCHECK(wrap_ibv_post_send(ctsQp->qp, &wr, &bad_wr));
+  // CTS belongs to the receive request, but its occasionally-signaled SQ
+  // batching can outlive that request. Record its WR/SGE shape without
+  // claiming request-owned QP retirement.
+  ncclIbRecordWr(req, ctsQp->qp->qp_num, &wr);
 
   TRACE(NCCL_NET, "NET/IB: %s: CTS posted (req=%p, comm=%p, id=%ld, slot=%d, nreqs=%d, wr_id=%ld, opcode=%d, send_flags=%d, qp_num=%u)", __func__, req, req->base, req->id, slot, req->nreqs, wr.wr_id, wr.opcode, wr.send_flags, ctsQp->qp->qp_num);
 
@@ -459,6 +590,9 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int*
   req->type = NCCL_NET_IB_REQ_RECV;
   req->sock = &comm->base.sock;
   req->nreqs = n;
+  if (ncclIbTelemetryDetailed(req))
+    for (int i = 0; i < n; ++i) req->telemetryExpectedBytes += sizes[i];
+  ncclIbRecordRequestState(req, NCCL_TELEM_RDMA_REQUEST_CREATE);
   if (comm->base.resiliency) {
     // When resiliency is enabled, a recv request can be served by any device.
     for (int devIndex = 0; devIndex < comm->base.vProps.ndevs; devIndex++) {
@@ -476,6 +610,8 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int*
 
   TIME_START(1);
   const int nqps = ncclIbCommBaseGetNqpsPerRequest(&comm->base);
+  ncclIbRecordRequestState(req, NCCL_TELEM_RDMA_REQUEST_READY);
+  ncclIbRecordRequestState(req, NCCL_TELEM_RDMA_REQUEST_POST_BEGIN);
   int qpIndex = -1;
   ncclIbQp* qp = NULL;
   for (int i = 0; i < nqps; i++) {
@@ -487,6 +623,17 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int*
     // Post receive work request on the QP
     comm->ibRecvWorkRequest.wr_id = slot;
     NCCLCHECK(ncclIbPostRecvWorkRequest(qp->qp, &comm->ibRecvWorkRequest));
+    if (ncclIbTelemetryDetailed(req)) {
+      qp->telemetryRqPostedWrs++;
+      req->telemetryWrCount++;
+      for (int c = 0; c < req->telemetryContextCount; ++c) {
+        const ncclTelemetryNetRequestContext* context = req->telemetryContexts + c;
+        ncclTelemetryRecordRdmaWr(context, req->id, context->proxyId, qp->qp->qp_num,
+          comm->ibRecvWorkRequest.wr_id, 0xff, 0, comm->ibRecvWorkRequest.num_sge,
+          0, 0, 0, 0);
+      }
+      ncclIbRecordQpDepth(req, qp, NCCL_TELEM_RDMA_WQE_POST, true);
+    }
     if (req->telemetryContextCount != 0) {
       ncclIbRecordRequestTelemetry(req, qp->qp->qp_num, comm->ibRecvWorkRequest.wr_id,
         0, 0, 0, NCCL_TELEM_RDMA_WQE_POST, true);
@@ -531,6 +678,7 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int*
   // Post to FIFO to notify sender
   TIME_START(2);
   NCCLCHECK(ncclIbPostFifo(comm, req, slot));
+  ncclIbRecordRequestState(req, NCCL_TELEM_RDMA_REQUEST_POST_END);
   comm->base.fifoHead++;
   TIME_STOP(2);
 
@@ -547,8 +695,13 @@ ncclResult_t ncclIbIflush(void* recvComm, int n, void** data, int* sizes, void**
   // Only flush once using the last non-zero receive
   struct ncclIbRequest* req;
   NCCLCHECK(ncclIbGetRequest(&comm->base, &req));
+  req->id = (comm->base.fifoHead << 8) | uint64_t(req - comm->base.reqs);
   req->type = NCCL_NET_IB_REQ_FLUSH;
   req->sock = &comm->base.sock;
+  if (ncclIbTelemetryDetailed(req)) req->telemetryExpectedBytes = sizes[last];
+  ncclIbRecordRequestState(req, NCCL_TELEM_RDMA_REQUEST_CREATE);
+  ncclIbRecordRequestState(req, NCCL_TELEM_RDMA_REQUEST_READY);
+  ncclIbRecordRequestState(req, NCCL_TELEM_RDMA_REQUEST_POST_BEGIN);
   struct ncclIbMrHandle* mhandle = (struct ncclIbMrHandle*) mhandles[last];
 
   // We don't know which devIndex the recv was on, so we flush on all devices
@@ -571,9 +724,13 @@ ncclResult_t ncclIbIflush(void* recvComm, int n, void** data, int* sizes, void**
     TIME_STOP(4);
 
     ncclIbAddEvent(req, i);
+    ncclIbRecordWr(req, comm->devs[i].gpuFlush.qp.qp->qp_num, &wr);
+    ncclIbTrackSqBatch(req, &comm->devs[i].gpuFlush.qp, 1,
+      wr.sg_list ? wr.sg_list->length : 0);
 
     TRACE(NCCL_NET, "NET/IB: %s: Flush request posted (req=%p, comm=%p, wr_id=%ld)", __func__, req, req->base, wr.wr_id);
   }
+  ncclIbRecordRequestState(req, NCCL_TELEM_RDMA_REQUEST_POST_END);
 
   *request = req;
   return ncclSuccess;
@@ -646,9 +803,82 @@ static inline bool ncclIbRequestIsComplete(struct ncclIbRequest *request) {
   return complete;
 }
 
+static inline void ncclIbRecordCqeDetail(struct ncclIbRequest* request,
+                                         const struct ibv_wc* wc) {
+  if (!ncclIbTelemetryDetailed(request)) return;
+  uint64_t now = ncclIbTelemetryNowNs();
+  if (request->telemetryFirstCqeNs == 0) request->telemetryFirstCqeNs = now;
+  request->telemetryLastCqeNs = now;
+  request->telemetryCqeCount++;
+  for (int i = 0; i < request->telemetryContextCount; ++i) {
+    // For error completions only wr_id, qp_num, and status are portable.
+    uint32_t opcode = wc->status == IBV_WC_SUCCESS ? wc->opcode : 0;
+    uint32_t byteLen = wc->status == IBV_WC_SUCCESS ? wc->byte_len : 0;
+    uint32_t srcQp = wc->status == IBV_WC_SUCCESS ? wc->src_qp : 0;
+    uint32_t wcFlags = wc->status == IBV_WC_SUCCESS ? wc->wc_flags : 0;
+    uint32_t immData = wc->status == IBV_WC_SUCCESS ? wc->imm_data : 0;
+    ncclTelemetryRecordRdmaCqeDetail(request->telemetryContexts + i, request->id,
+      wc->qp_num, wc->wr_id, opcode, wc->status, wc->vendor_err, srcQp,
+      wcFlags, immData, byteLen);
+  }
+}
+
+static inline struct ncclIbQp* ncclIbFindTelemetryQp(struct ncclIbRequest* request,
+                                                     uint32_t qpNum) {
+  for (int i = 0; i < request->base->nqps; ++i) {
+    struct ncclIbQp* qp = request->base->activeQps[i];
+    if (qp && qp->qp && qp->qp->qp_num == qpNum) return qp;
+  }
+  if (!request->base->isSend && request->type == NCCL_NET_IB_REQ_FLUSH) {
+    struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)request->base;
+    for (int i = 0; i < request->base->vProps.ndevs; ++i) {
+      struct ncclIbQp* qp = &comm->devs[i].gpuFlush.qp;
+      if (qp->qp && qp->qp->qp_num == qpNum) return qp;
+    }
+  }
+  return NULL;
+}
+
+static inline void ncclIbRetireSqBatch(struct ncclIbRequest* request,
+                                       const struct ibv_wc* wc) {
+  if (!ncclIbTelemetryDetailed(request)) return;
+  struct ncclIbQp* qp = ncclIbFindTelemetryQp(request, wc->qp_num);
+  if (qp == NULL) return;
+  for (int i = 0; i < request->telemetryRetireCount; ++i) {
+    if (request->telemetryRetireQpNum[i] != wc->qp_num) continue;
+    qp->telemetrySqCompletedWrs += request->telemetryRetireWrs[i];
+    qp->telemetrySqCompletedBytes += request->telemetryRetireBytes[i];
+    request->telemetryCompletedBytes = std::min(request->telemetryExpectedBytes,
+      request->telemetryCompletedBytes + request->telemetryRetireBytes[i]);
+    request->telemetryRetireWrs[i] = 0;
+    request->telemetryRetireBytes[i] = 0;
+    ncclIbRecordQpDepth(request, qp, NCCL_TELEM_RDMA_CQE, false);
+    break;
+  }
+}
+
+static inline void ncclIbRetireRq(struct ncclIbRequest* request,
+                                  const struct ibv_wc* wc) {
+  if (!ncclIbTelemetryDetailed(request)) return;
+  struct ncclIbQp* qp = ncclIbFindTelemetryQp(request, wc->qp_num);
+  if (qp == NULL) return;
+  qp->telemetryRqCompletedWrs++;
+  qp->telemetryRqCompletedBytes += wc->byte_len;
+  request->telemetryCompletedBytes = std::min(request->telemetryExpectedBytes,
+    request->telemetryCompletedBytes + wc->byte_len);
+  ncclIbRecordQpDepth(request, qp, NCCL_TELEM_RDMA_CQE, true);
+}
+
 static inline ncclResult_t ncclIbRequestComplete(struct ncclIbRequest* r, int* done, int* sizes) {
   TRACE(NCCL_NET, "NET/IB: %s: %s request completed (req=%p, comm=%p, id=%ld, type=%s)", __func__, r->base->isSend ? "Send" : "Recv", r, r->base, r->id, ncclIbReqTypeStr[r->type]);
   *done = 1;
+  for (int i = 0; i < r->base->vProps.ndevs; ++i) {
+    if (r->devBases[i]) ncclIbFlushPollTelemetry(r, i, r->devBases[i]->cq);
+  }
+  if (ncclIbTelemetryDetailed(r) && r->type == NCCL_NET_IB_REQ_RECV) {
+    r->telemetryCompletedBytes = r->telemetryExpectedBytes;
+  }
+  ncclIbRecordRequestState(r, NCCL_TELEM_RDMA_STATE_COMPLETE);
   if (r->telemetryContextCount != 0) {
     ncclIbRecordRequestTelemetry(r, 0, 0, 0, 0,
       r->type == NCCL_NET_IB_REQ_SEND ? r->send.size : 0,
@@ -724,11 +954,6 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
     WARN("NET/IB: %s: %s comm could not retreive a request found for a successful completion (comm=%p, wc.wr_id=%ld, opcode=%d, qp_num=%u)", __func__, commBase->isSend ? "Send" : "Recv", commBase, wc->wr_id, wc->opcode, wc->qp_num);
     return ncclInternalError;
   }
-  if (req->telemetryContextCount != 0) {
-    ncclIbRecordRequestTelemetry(req, wc->qp_num, wc->wr_id,
-      wc->opcode, wc->status, wc->byte_len, NCCL_TELEM_RDMA_CQE);
-  }
-
   #ifdef ENABLE_TRACE
   char line[SOCKET_NAME_MAXLEN+1];
   TRACE(NCCL_NET, "Got completion from peer %s with status=%d opcode=%d len=%u wr_id=%lu r=%p type=%d events={%d,%d,%d,%d}, devIndex=%d",
@@ -750,6 +975,12 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
         return ncclInternalError;
       }
       sendReq->events[devIndex]--;
+      if (sendReq->telemetryContextCount != 0) {
+        ncclIbRecordRequestTelemetry(sendReq, wc->qp_num, wc->wr_id,
+          wc->opcode, wc->status, wc->byte_len, NCCL_TELEM_RDMA_CQE);
+        ncclIbRecordCqeDetail(sendReq, wc);
+        sendReq->telemetryCompletedBytes = sendReq->telemetryExpectedBytes;
+      }
       TRACE(NCCL_NET, "NET/IB: %s: Got completion for a send request (req=%p, comm=%p, id=%ld, devIndex=%d, qp_num=%u)", __func__, sendReq, sendReq->base, sendReq->id, devIndex, wc->qp_num);
 #ifdef NCCL_ENABLE_NET_PROFILING
       // Stop Qp event for sendReq
@@ -757,6 +988,7 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
       NCCLCHECK(ncclProfilerFunction(&sendReq->pInfo[j].qpEventHandles[qpIndex], ncclProfilerNetEventStop, NULL, 0, NULL));
 #endif
     }
+    ncclIbRetireSqBatch(req, wc);
   } else {
     if (wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       if (req->type == NCCL_NET_IB_REQ_UNUSED && commBase->resiliency) {
@@ -775,6 +1007,10 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
         }
       }
       TRACE(NCCL_NET, "NET/IB: %s: Got completion for a recv request (req=%p, comm=%p, id=%ld, devIndex=%d, qp_num=%u)", __func__, req, req->base, req->id, devIndex, wc->qp_num);
+      ncclIbRecordRequestTelemetry(req, wc->qp_num, wc->wr_id,
+        wc->opcode, wc->status, wc->byte_len, NCCL_TELEM_RDMA_CQE);
+      ncclIbRecordCqeDetail(req, wc);
+      ncclIbRetireRq(req, wc);
       struct ncclIbRecvComm* recvComm = (struct ncclIbRecvComm*)commBase;
       if (recvComm->prepostReceiveWorkRequests) {
         // Post another receive work request on the QP
@@ -783,11 +1019,19 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
         NCCLCHECK(ncclIbCommBaseGetQpByQpNum(commBase, devIndex, wc->qp_num, &qp, &qpIndex));
         req->recv.cmplsRecords->completions[qpIndex] = 1;
         ncclIbPostRecvWorkRequest(qp->qp, &recvComm->ibRecvWorkRequest);
+        if (ncclIbTelemetryDetailed(req)) {
+          qp->telemetryRqPostedWrs++;
+          ncclIbRecordQpDepth(req, qp, NCCL_TELEM_RDMA_WQE_POST, true);
+        }
       }
       req->events[devIndex]--;
     } else if (wc->opcode == IBV_WC_RDMA_READ) {
       TRACE(NCCL_NET, "NET/IB: %s: Got completion for a flush request (req=%p, comm=%p, id=%ld, devIndex=%d, qp_num=%u)", __func__, req, req->base, req->id, devIndex, wc->qp_num);
       req->events[devIndex]--;
+      ncclIbRecordRequestTelemetry(req, wc->qp_num, wc->wr_id,
+        wc->opcode, wc->status, wc->byte_len, NCCL_TELEM_RDMA_CQE);
+      ncclIbRecordCqeDetail(req, wc);
+      ncclIbRetireSqBatch(req, wc);
     } else if (wc->opcode == IBV_WC_RDMA_WRITE) {
       // This is a CTS completion
       TRACE(NCCL_NET, "NET/IB: %s: Got completion for a CTS (req=%p, comm=%p, id=%ld, devIndex=%d, qp_num=%u)", __func__, req, req->base, req->id, devIndex, wc->qp_num);
@@ -864,7 +1108,24 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
         continue;
       }
       TIME_START(3);
+      bool firstTelemetryPoll = false;
+      uint64_t telemetryPollStart = 0;
+      if (ncclIbTelemetryDetailed(r)) {
+        telemetryPollStart = ncclIbTelemetryNowNs();
+        if (r->telemetryPollWindowStartNs[i] == 0)
+          r->telemetryPollWindowStartNs[i] = telemetryPollStart;
+        firstTelemetryPoll = r->telemetryPollSeen[i] == 0;
+        r->telemetryPollSeen[i] = 1;
+      }
       NCCLCHECK(wrap_ibv_poll_cq(r->devBases[i]->cq, 4, wcs, &wrDone));
+      if (ncclIbTelemetryDetailed(r)) {
+        r->telemetryPollBusyNs[i] += ncclIbTelemetryNowNs() - telemetryPollStart;
+        r->telemetryPollCalls[i]++;
+        if (wrDone == 0) r->telemetryPollEmpty[i]++;
+        r->telemetryPollReturned[i] += wrDone;
+        if (firstTelemetryPoll || wrDone > 0 || r->telemetryPollEmpty[i] >= 64)
+          ncclIbFlushPollTelemetry(r, i, r->devBases[i]->cq);
+      }
       if (wrDone == 0) { TIME_CANCEL(3); } else { TIME_STOP(3); }
       if (wrDone == 0) continue;
       totalWrDone += wrDone;
@@ -875,6 +1136,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
           if (errorReq != NULL && errorReq->telemetryContextCount != 0) {
             ncclIbRecordRequestTelemetry(errorReq, wc->qp_num,
               wc->wr_id, wc->opcode, wc->status, wc->byte_len, NCCL_TELEM_RDMA_CQE);
+            ncclIbRecordCqeDetail(errorReq, wc);
           }
           if (r->base->resiliency == NULL) {
             WARN("NET/IB: %s: Got CQE with error (devIndex=%d, req=%p, comm=%p (%s), wr_id=%lu, qp_num=%d)", __func__, i, r, r->base, r->base->isSend ? "send" : "recv", wc->wr_id, wc->qp_num);

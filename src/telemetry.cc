@@ -8,6 +8,7 @@
 #include "graph.h"
 
 #include <atomic>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -90,7 +91,7 @@ void dump() {
   fwrite(&dropped, sizeof(dropped), 1, f);
   if (text != nullptr) fprintf(text, "HEADER version=%u event_size=%u events=%llu dropped=%llu "
                                "clock=monotonic_ns level=%d capabilities=proxy_progress,net_path,rdma_external_counters "
-                               "qp_wqe_cqe=ib_internal_diagnostic\n",
+                               "qp_wqe_cqe=ib_internal_diagnostic rdma_detail=request_state,wr,sge,qp_depth,cq_poll,cqe_detail\n",
                                version, eventSize, (unsigned long long)(end - begin),
                                (unsigned long long)dropped, ncclTelemetryLevel());
   for (uint64_t i = begin; i < end; ++i) {
@@ -229,6 +230,62 @@ void dump() {
               (e.reserved >> 8) & 0xff,
               (e.reserved >> 16) & 0xff,
               (e.reserved >> 24) & 0x1,
+              (unsigned long long)e.payloadBytes);
+      break;
+    case NCCL_TELEM_RDMA_REQUEST_STATE:
+      fprintf(text, "[%llu ns] RDMA_REQUEST_STATE request=%llu proxy=%llu rank=%u ch=%u type=%u state=%u expected_bytes=%llu posted_bytes=%llu completed_bytes=%llu wrs=%u cqes=%u\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.planId, e.rank, e.channel, e.protocol, e.algorithm,
+              (unsigned long long)e.payloadBytes, (unsigned long long)e.trafficBytes,
+              (unsigned long long)e.value, e.reserved & 0xffff, e.reserved >> 16);
+      break;
+    case NCCL_TELEM_RDMA_WR:
+      fprintf(text, "[%llu ns] RDMA_WR request=%llu proxy=%llu rank=%u ch=%u peer=%u direction=%s qp=%u wr_id=%llu opcode=%u send_flags=0x%x num_sge=%u total_sge_bytes=%llu remote_addr=0x%llx rkey=%u imm_data=%u\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.planId, e.rank, e.channel, e.algorithm,
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
+              e.protocol, (unsigned long long)e.trafficBytes, (e.collective >> 8) & 0xff,
+              (e.collective >> 16) & 0xff, (e.collective >> 24) & 0xff,
+              (unsigned long long)e.reserved,
+              (unsigned long long)e.payloadBytes, uint32_t(e.value >> 32), uint32_t(e.value));
+      break;
+    case NCCL_TELEM_RDMA_SGE:
+      fprintf(text, "[%llu ns] RDMA_SGE request=%llu proxy=%llu rank=%u ch=%u peer=%u direction=%s qp=%u wr_id=%llu sge_index=%u addr=0x%llx length=%llu lkey=%u\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.planId, e.rank, e.channel, e.algorithm,
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
+              e.protocol, (unsigned long long)e.value, e.collective >> 8,
+              (unsigned long long)e.payloadBytes, (unsigned long long)e.trafficBytes,
+              e.reserved);
+      break;
+    case NCCL_TELEM_RDMA_QP_DEPTH:
+      fprintf(text, "[%llu ns] RDMA_QP_DEPTH request=%llu proxy=%llu rank=%u ch=%u peer=%u direction=%s qp=%u phase=%u outstanding_wrs=%u posted_bytes=%llu completed_bytes=%llu posted_wrs=%u completed_wrs=%u\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.planId, e.rank, e.channel, e.algorithm,
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
+              e.protocol, (e.reserved >> 16) & 0xff, e.reserved & 0xffff,
+              (unsigned long long)e.payloadBytes, (unsigned long long)e.trafficBytes,
+              uint32_t(e.value >> 32), uint32_t(e.value));
+      break;
+    case NCCL_TELEM_RDMA_CQ_POLL:
+      fprintf(text, "[%llu ns] RDMA_CQ_POLL request=%llu proxy=%llu rank=%u ch=%u cq_id=0x%x window_start_ns=%llu poll_calls=%llu empty_polls=%u returned_cqes=%llu busy_ns=%u\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.planId, e.rank, e.channel, e.algorithm,
+              (unsigned long long)e.value, (unsigned long long)e.payloadBytes, e.protocol,
+              (unsigned long long)e.trafficBytes, e.reserved);
+      break;
+    case NCCL_TELEM_RDMA_CQE_DETAIL:
+      fprintf(text, "[%llu ns] RDMA_CQE_DETAIL request=%llu proxy=%llu rank=%u ch=%u peer=%u direction=%s qp=%u wr_id=%llu opcode=%u status=%u vendor_err=%u src_qp=%u wc_flags=0x%x imm_data=%u byte_len=%llu\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.planId, e.rank, e.channel, e.algorithm,
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
+              e.protocol, (unsigned long long)e.trafficBytes, (e.reserved >> 8) & 0xff,
+              e.reserved & 0xff, e.collective >> 8,
+              uint32_t(e.value >> 32), (e.reserved >> 16) & 0xffff, uint32_t(e.value),
               (unsigned long long)e.payloadBytes);
       break;
     default:
@@ -393,6 +450,78 @@ void ncclTelemetryRecordRdmaRequest(const ncclTelemetryNetRequestContext* contex
   record(NCCL_TELEM_RDMA_REQUEST, context->collectiveId, context->proxyId, context->rank,
          context->channel, context->direction | ((status & 0xff) << 8), context->peer,
          qpNum, bytes, wrId, requestValue, reserved);
+}
+
+void ncclTelemetryRecordRdmaRequestState(const ncclTelemetryNetRequestContext* context,
+                                         uint64_t requestId, uint32_t requestType,
+                                         uint32_t state, uint64_t expectedBytes,
+                                         uint64_t postedBytes, uint64_t completedBytes,
+                                         uint32_t wrCount, uint32_t cqeCount) {
+  if (context == nullptr || ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
+  uint32_t reserved = (wrCount & 0xffff) | ((cqeCount & 0xffff) << 16);
+  record(NCCL_TELEM_RDMA_REQUEST_STATE, requestId, context->proxyId,
+         context->rank, context->channel, context->direction, requestType, state,
+         expectedBytes, postedBytes, completedBytes, reserved);
+}
+
+void ncclTelemetryRecordRdmaWr(const ncclTelemetryNetRequestContext* context,
+                               uint64_t requestId, uint64_t proxyId, uint32_t qpNum,
+                               uint64_t wrId, uint32_t opcode, uint32_t sendFlags,
+                               uint32_t numSge, uint64_t totalSgeBytes,
+                               uint64_t remoteAddr, uint32_t rkey, uint32_t immData) {
+  if (context == nullptr || ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
+  uint32_t reserved = uint32_t(std::min<uint64_t>(totalSgeBytes, UINT32_MAX));
+  uint32_t collective = uint32_t(context->direction) | ((opcode & 0xff) << 8) |
+                        ((sendFlags & 0xff) << 16) | ((numSge & 0xff) << 24);
+  uint64_t value = (uint64_t(rkey) << 32) | immData;
+  record(NCCL_TELEM_RDMA_WR, requestId, proxyId, context->rank, context->channel,
+         collective, context->peer, qpNum, remoteAddr, wrId, value, reserved);
+}
+
+void ncclTelemetryRecordRdmaSge(const ncclTelemetryNetRequestContext* context,
+                                uint64_t requestId, uint64_t proxyId, uint32_t qpNum,
+                                uint64_t wrId, uint32_t sgeIndex, uint64_t addr,
+                                uint32_t length, uint32_t lkey) {
+  if (context == nullptr || ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
+  uint32_t collective = uint32_t(context->direction) | ((sgeIndex & 0xffffff) << 8);
+  record(NCCL_TELEM_RDMA_SGE, requestId, proxyId, context->rank, context->channel,
+         collective, context->peer, qpNum, addr, length, wrId, lkey);
+}
+
+void ncclTelemetryRecordRdmaQpDepth(const ncclTelemetryNetRequestContext* context,
+                                    uint64_t requestId, uint64_t proxyId, uint32_t qpNum,
+                                    uint32_t phase, uint32_t outstandingWrs,
+                                    uint64_t postedBytes, uint64_t completedBytes,
+                                    uint32_t postedWrs, uint32_t completedWrs) {
+  if (context == nullptr || ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
+  uint32_t reserved = (outstandingWrs & 0xffff) | ((phase & 0xff) << 16);
+  uint64_t value = (uint64_t(postedWrs) << 32) | completedWrs;
+  record(NCCL_TELEM_RDMA_QP_DEPTH, requestId, proxyId, context->rank, context->channel,
+         context->direction, context->peer, qpNum, postedBytes, completedBytes, value, reserved);
+}
+
+void ncclTelemetryRecordRdmaCqPoll(const ncclTelemetryNetRequestContext* context,
+                                   uint64_t requestId, uint64_t cqId, uint64_t windowStartNs,
+                                   uint64_t pollCalls, uint64_t emptyPolls,
+                                   uint64_t returnedCqes, uint64_t busyNs) {
+  if (context == nullptr || ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
+  record(NCCL_TELEM_RDMA_CQ_POLL, requestId, context->proxyId, context->rank,
+         context->channel, context->direction, uint32_t(cqId), uint32_t(emptyPolls),
+         pollCalls, returnedCqes, windowStartNs, uint32_t(busyNs));
+}
+
+void ncclTelemetryRecordRdmaCqeDetail(const ncclTelemetryNetRequestContext* context,
+                                      uint64_t requestId, uint32_t qpNum, uint64_t wrId,
+                                      uint32_t opcode, uint32_t status, uint32_t vendorErr,
+                                      uint32_t srcQp, uint32_t wcFlags, uint32_t immData,
+                                      uint32_t byteLen) {
+  if (context == nullptr || ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
+  uint32_t reserved = (status & 0xff) | ((opcode & 0xff) << 8) |
+                      ((wcFlags & 0xffff) << 16);
+  uint32_t collective = uint32_t(context->direction) | ((vendorErr & 0xffffff) << 8);
+  uint64_t value = (uint64_t(srcQp) << 32) | immData;
+  record(NCCL_TELEM_RDMA_CQE_DETAIL, requestId, context->proxyId, context->rank,
+         context->channel, collective, context->peer, qpNum, byteLen, wrId, value, reserved);
 }
 
 void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next) {
