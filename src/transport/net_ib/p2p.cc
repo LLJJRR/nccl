@@ -9,6 +9,7 @@
 #include "common.h"
 #include "compiler.h"
 #include "p2p_resiliency.h"
+#include "telemetry.h"
 
 NCCL_PARAM(IbArThreshold, "IB_AR_THRESHOLD", -2);
 int64_t ncclIbArThreshold = 8192;
@@ -26,6 +27,7 @@ ncclResult_t ncclIbGetRequest(struct ncclIbNetCommBase* base, struct ncclIbReque
       r->sock = NULL;
       memset(r->devBases, 0, sizeof(r->devBases));
       memset(r->events, 0, sizeof(r->events));
+      r->telemetryContextValid = ncclTelemetryGetNetRequestContext(&r->telemetryContext);
       *req = r;
       return ncclSuccess;
     }
@@ -236,6 +238,19 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
     }
 #endif // ENABLE_TRACE
     NCCLCHECK(wrap_ibv_post_send(qp->qp, comm->wrs, &bad_wr));
+    for (int r = 0; r < nreqs; r++) {
+      if (reqs[r]->telemetryContextValid) {
+        ncclTelemetryRecordRdmaRequest(&reqs[r]->telemetryContext, reqs[r]->id,
+          qp->qp->qp_num, comm->wrs[r].wr_id, comm->wrs[r].opcode, 0,
+          comm->wrs[r].sg_list ? comm->wrs[r].sg_list->length : 0,
+          NCCL_TELEM_RDMA_WQE_POST);
+      }
+    }
+    if (reqs[0]->telemetryContextValid && lastWr != comm->wrs + nreqs - 1) {
+      ncclTelemetryRecordRdmaRequest(&reqs[0]->telemetryContext, reqs[0]->id,
+        qp->qp->qp_num, lastWr->wr_id, lastWr->opcode, 0,
+        lastWr->sg_list ? lastWr->sg_list->length : 0, NCCL_TELEM_RDMA_WQE_POST);
+    }
 
     // Update the send offset and addresses for the next QP according to the
     // actual data size that was sent on the current QP, for every request
@@ -451,6 +466,10 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int*
     // Post receive work request on the QP
     comm->ibRecvWorkRequest.wr_id = slot;
     NCCLCHECK(ncclIbPostRecvWorkRequest(qp->qp, &comm->ibRecvWorkRequest));
+    if (req->telemetryContextValid) {
+      ncclTelemetryRecordRdmaRequest(&req->telemetryContext, req->id, qp->qp->qp_num,
+        comm->ibRecvWorkRequest.wr_id, 0, 0, 0, NCCL_TELEM_RDMA_WQE_POST);
+    }
 #ifdef NCCL_ENABLE_NET_PROFILING
     // Start a QP event for every request in the multirecv and every qp
     for (int r = 0; r < n; r++) {
@@ -592,6 +611,11 @@ static inline bool ncclIbRequestIsComplete(struct ncclIbRequest *request) {
 static inline ncclResult_t ncclIbRequestComplete(struct ncclIbRequest* r, int* done, int* sizes) {
   TRACE(NCCL_NET, "NET/IB: %s: %s request completed (req=%p, comm=%p, id=%ld, type=%s)", __func__, r->base->isSend ? "Send" : "Recv", r, r->base, r->id, ncclIbReqTypeStr[r->type]);
   *done = 1;
+  if (r->telemetryContextValid) {
+    ncclTelemetryRecordRdmaRequest(&r->telemetryContext, r->id, 0, 0, 0, 0,
+      r->type == NCCL_NET_IB_REQ_SEND ? r->send.size : 0,
+      NCCL_TELEM_RDMA_REQUEST_COMPLETE);
+  }
   if (sizes && r->type == NCCL_NET_IB_REQ_RECV) {
     TRACE(NCCL_NET, "NET/IB: %s: Recv request completed (req=%p, comm=%p, id=%ld, type=%s, nreqs=%d)", __func__, r, r->base, r->id, ncclIbReqTypeStr[r->type], r->nreqs);
     int *sizesToReport = (r->nreqs > 1 || r->recv.cmplsRecords->sizes[0] > 0) ? r->recv.cmplsRecords->sizes : &(r->recv.aggSize);
@@ -661,6 +685,10 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
   if (req == NULL) {
     WARN("NET/IB: %s: %s comm could not retreive a request found for a successful completion (comm=%p, wc.wr_id=%ld, opcode=%d, qp_num=%u)", __func__, commBase->isSend ? "Send" : "Recv", commBase, wc->wr_id, wc->opcode, wc->qp_num);
     return ncclInternalError;
+  }
+  if (req->telemetryContextValid) {
+    ncclTelemetryRecordRdmaRequest(&req->telemetryContext, req->id, wc->qp_num, wc->wr_id,
+      wc->opcode, wc->status, wc->byte_len, NCCL_TELEM_RDMA_CQE);
   }
 
   #ifdef ENABLE_TRACE
@@ -779,6 +807,10 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
       for (int w=0; w<wrDone; w++) {
         struct ibv_wc *wc = wcs+w;
         if (wc->status != IBV_WC_SUCCESS) {
+          if (r->telemetryContextValid) {
+            ncclTelemetryRecordRdmaRequest(&r->telemetryContext, r->id, wc->qp_num,
+              wc->wr_id, wc->opcode, wc->status, wc->byte_len, NCCL_TELEM_RDMA_CQE);
+          }
           if (r->base->resiliency == NULL) {
             WARN("NET/IB: %s: Got CQE with error (devIndex=%d, req=%p, comm=%p (%s), wr_id=%lu, qp_num=%d)", __func__, i, r, r->base, r->base->isSend ? "send" : "recv", wc->wr_id, wc->qp_num);
             ncclIbLogCompletionWithError(r->base, wc, i);

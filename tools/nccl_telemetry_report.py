@@ -11,17 +11,24 @@ proxy_progress = re.compile(
     r"peer=(\d+) direction=(SEND|RECV|UNKNOWN) transport=(\d+) phase=(\d+) status=(\d+) "
     r"expected_bytes=(\d+) progressed_bytes=(\d+)"
 )
+rdma_request = re.compile(
+    r"\[(\d+) ns\] RDMA_REQUEST proxy=(\d+) coll=(\d+) plan=(\d+) rank=(\d+) ch=(\d+) "
+    r"peer=(\d+) direction=(SEND|RECV|UNKNOWN) request=(\d+) qp=(\d+) wr_id=(\d+) "
+    r"opcode=(\d+) status=(\d+) phase=(\d+) bytes=(\d+)"
+)
 events, transports = defaultdict(dict), Counter()
 transport_edges = defaultdict(lambda: {'count': 0, 'channels': set(), 'conn': set()})
 network_paths = defaultdict(lambda: {'count': 0, 'channels': set(), 'conn': set(), 'speed': 0})
 collectives = defaultdict(lambda: {'ranks': set(), 'payload': 0, 'traffic': 0, 'first': [], 'last': []})
 channel_plans = {}
-transfers = defaultdict(lambda: {'bytes': 0, 'ops': 0, 'first': None, 'last': None, 'peers': set()})
+transfers = defaultdict(lambda: {'bytes': 0, 'ops': 0, 'first': None, 'last': None,
+                                 'peers': set(), 'timestamps': []})
 peer_transfers = defaultdict(lambda: {'bytes': 0, 'ops': 0, 'steps': set()})
 work_windows = defaultdict(lambda: {'first': None, 'last': None})
 summaries = []
 host_times = []
 proxy_events = defaultdict(list)
+rdma_events = defaultdict(list)
 for path in sys.argv[1:]:
     with open(path, errors="replace") as f:
         for line in f:
@@ -44,11 +51,22 @@ for path in sys.argv[1:]:
             if m:
                 (ts, proxy_id, coll, plan, rank, ch, peer, direction, transport, phase,
                  status, expected, progressed) = m.groups()
-                proxy_events[int(proxy_id)].append({
+                proxy_events[(int(rank), int(proxy_id))].append({
                     'timestamp': int(ts), 'collective': int(coll), 'plan': int(plan),
                     'rank': int(rank), 'channel': int(ch), 'peer': int(peer),
                     'direction': direction, 'transport': int(transport), 'phase': int(phase),
                     'status': int(status), 'expected': int(expected), 'progressed': int(progressed)
+                })
+            m = rdma_request.search(line)
+            if m:
+                (ts, proxy_id, coll, plan, rank, ch, peer, direction, request_id, qp, wr_id,
+                 opcode, status, phase, bytes_) = m.groups()
+                rdma_events[(int(rank), int(proxy_id))].append({
+                    'timestamp': int(ts), 'collective': int(coll), 'plan': int(plan),
+                    'rank': int(rank), 'channel': int(ch), 'peer': int(peer), 'direction': direction,
+                    'request': int(request_id), 'qp': int(qp), 'wr_id': int(wr_id),
+                    'opcode': int(opcode), 'status': int(status), 'phase': int(phase),
+                    'bytes': int(bytes_)
                 })
             m = re.search(r"TRANSPORT rank=(\d+) peer=(\d+) ch=(\d+) conn=(\d+)(?: direction=(SEND|RECV))? type=(\w+) path=(\w+) path_type=(\d+)", line)
             if m:
@@ -72,6 +90,7 @@ for path in sys.argv[1:]:
                 t = transfers[(coll, plan, op, rank, ch, direction)]; t['bytes'] += bytes_; t['ops'] += 1; t['peers'].add(peer)
                 p = peer_transfers[(coll, plan, rank, ch, peer, direction, transport)]; p['bytes'] += bytes_; p['ops'] += 1; p['steps'].add(step)
                 ts = int(line.split('[',1)[1].split(' ',1)[0]); t['first'] = ts if t['first'] is None else min(t['first'], ts); t['last'] = ts if t['last'] is None else max(t['last'], ts)
+                t['timestamps'].append(ts)
             else:
                 m = re.search(r"TRANSFER op=(\d+) rank=(\d+) ch=(\d+) peer=(\d+) transport=(\d+) step=(\d+) bytes=(\d+)", line)
                 if m:
@@ -80,10 +99,17 @@ for path in sys.argv[1:]:
                     t = transfers[(coll, plan, op, rank, ch, direction)]; t['bytes'] += bytes_; t['ops'] += 1; t['peers'].add(peer)
                     p = peer_transfers[(coll, plan, rank, ch, peer, direction, transport)]; p['bytes'] += bytes_; p['ops'] += 1; p['steps'].add(step)
                     ts = int(line.split('[',1)[1].split(' ',1)[0]); t['first'] = ts if t['first'] is None else min(t['first'], ts); t['last'] = ts if t['last'] is None else max(t['last'], ts)
-            m = re.search(r"COLLECTIVE id=(\d+) rank=(\d+) type=(\S+) payload=(\d+) traffic=(\d+)", line)
+                    t['timestamps'].append(ts)
+            m = re.search(r"COLLECTIVE id=(\d+) comm_id=(0x[0-9a-fA-F]+) nranks=(\d+) rank=(\d+) type=(\S+) payload=(\d+) traffic=(\d+)", line)
             if m:
-                cid, rank, typ, payload, traffic = m.groups(); c = collectives[(int(cid), typ)]
+                cid, comm_id, nranks, rank, typ, payload, traffic = m.groups(); c = collectives[(comm_id, int(cid), typ)]
                 c['ranks'].add(int(rank)); c['payload'] = max(c['payload'], int(payload)); c['traffic'] = max(c['traffic'], int(traffic)); c['first'].append(int(line.split('[',1)[1].split(' ',1)[0]))
+                c['comm_id'], c['nranks'] = comm_id, int(nranks)
+            else:
+                m = re.search(r"COLLECTIVE id=(\d+) rank=(\d+) type=(\S+) payload=(\d+) traffic=(\d+)", line)
+                if m:
+                    cid, rank, typ, payload, traffic = m.groups(); c = collectives[('UNKNOWN', int(cid), typ)]
+                    c['ranks'].add(int(rank)); c['payload'] = max(c['payload'], int(payload)); c['traffic'] = max(c['traffic'], int(traffic)); c['first'].append(int(line.split('[',1)[1].split(' ',1)[0]))
             m = re.search(r"CHANNEL coll=(\d+) plan=(\d+) rank=(\d+) ch=(\d+) type=(\S+) algo=(\S+) proto=(\S+) payload=(\d+) traffic=(\d+)", line)
             if m:
                 coll, plan, rank, ch, typ, algo, proto, payload, traffic = m.groups()
@@ -100,7 +126,7 @@ print('NCCL Telemetry Report')
 print(f'matched_work_events={len(rows)} input_files={len(sys.argv)-1}')
 if proxy_events:
     print(f'proxy_operations={len(proxy_events)}')
-    for proxy_id, entries in sorted(proxy_events.items()):
+    for (proxy_rank, proxy_id), entries in sorted(proxy_events.items()):
         by_phase = {entry['phase']: entry for entry in entries}
         identity = next((entry for entry in entries
                          if entry['direction'] != 'UNKNOWN' or entry['transport'] != 0), entries[0])
@@ -125,6 +151,30 @@ if proxy_events:
         if duration is not None: fields.append(f'proxy_duration_ns={duration}')
         if rate is not None: fields.append(f'progress_rate_Bps={rate:.1f}')
         if error: fields.append(f"error_status={error['status']}")
+        rdma = rdma_events.get((proxy_rank, proxy_id), [])
+        rdma = [event for event in rdma if event['rank'] == identity['rank'] and
+                event['channel'] == identity['channel']]
+        if rdma:
+            posts = [event for event in rdma if event['phase'] == 0]
+            cqes = [event for event in rdma if event['phase'] == 1]
+            qps = sorted(set(event['qp'] for event in rdma if event['qp']))
+            statuses = sorted(set(event['status'] for event in cqes if event['status']))
+            post_times = defaultdict(list)
+            for event in posts:
+                post_times[(event['request'], event['qp'], event['wr_id'])].append(event['timestamp'])
+            completion_latencies = []
+            for event in cqes:
+                key = (event['request'], event['qp'], event['wr_id'])
+                if post_times[key]:
+                    completion_latencies.append(event['timestamp'] - post_times[key].pop(0))
+            unmatched_posts = sum(len(times) for times in post_times.values())
+            fields.append(f'rdma_wqe_posts={len(posts)}')
+            fields.append(f'rdma_cqes={len(cqes)}')
+            fields.append(f'rdma_qps={qps}')
+            if completion_latencies:
+                fields.append(f'rdma_max_completion_ns={max(completion_latencies)}')
+            fields.append(f'rdma_unmatched_posts={unmatched_posts}')
+            if statuses: fields.append(f'rdma_statuses={statuses}')
         if not complete and not error: fields.append('diagnostic=incomplete_proxy')
         print('  proxy_timeline=' + ' '.join(fields))
 if summaries:
@@ -180,7 +230,9 @@ for (coll, plan, op, rank, ch, direction), t in sorted(transfers.items()):
     ww = work_windows[(coll, plan, rank, ch)]
     duration = (ww['last'] - ww['first']) if ww['first'] is not None and ww['last'] is not None else (t['last'] or 0) - (t['first'] or 0)
     duration = max(1, int(duration)); bw = float(t['bytes']) * 1e9 / float(duration)
-    print(f'channel_transfer=coll:{coll}:plan:{plan}:op:{op}:rank:{rank}:ch:{ch}:direction:{direction}:bytes:{t["bytes"]}:ops:{t["ops"]}:peers:{sorted(t["peers"])}:duration_ns:{duration}:bandwidth_Bps:{bw:.1f}')
+    ordered_times = sorted(t['timestamps'])
+    max_gap = max((b-a for a, b in zip(ordered_times, ordered_times[1:])), default=0)
+    print(f'channel_transfer=coll:{coll}:plan:{plan}:op:{op}:rank:{rank}:ch:{ch}:direction:{direction}:bytes:{t["bytes"]}:ops:{t["ops"]}:peers:{sorted(t["peers"])}:duration_ns:{duration}:max_progress_gap_ns:{max_gap}:bandwidth_Bps:{bw:.1f}')
     if channel_plans and coll not in (-1, (1 << 64) - 1) and (coll, plan, rank, ch) not in channel_plans:
         print(f'diagnostic=unmatched_transfer:coll={coll}:plan={plan}:rank={rank}:channel={ch}:op={op}')
 by_collective_rank = defaultdict(list)
@@ -206,6 +258,6 @@ for (coll, plan, rank), vals in sorted(by_collective_rank.items()):
         if host_duration > 0 and duration == 0: print(f'diagnostic=timer_stall:coll={coll}:plan={plan}:rank={rank}:channel={ch}:counter={counter}:host_duration_ns={host_duration}')
 if collectives:
     print('collective_summary=')
-    for (cid, typ), c in sorted(collectives.items()):
-        print(f'  id={cid} type={typ} ranks={len(c["ranks"])} payload={c["payload"]} traffic={c["traffic"]}')
+    for (comm_id, cid, typ), c in sorted(collectives.items()):
+        print(f'  comm_id={comm_id} id={cid} type={typ} ranks={len(c["ranks"])} nranks={c.get("nranks", "UNKNOWN")} payload={c["payload"]} traffic={c["traffic"]}')
 if not rows and not summaries: print('diagnostic=no_matched_gpu_work_pairs')

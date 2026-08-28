@@ -2673,8 +2673,8 @@ static ncclResult_t collTaskAppend(
   }
   t->trafficBytes = t->count*elementSize*ncclFuncTrafficPerByte(t->func, comm->nRanks);
   t->telemetryId = ncclTelemetryNextCollectiveId();
-  ncclTelemetryRecordCollective(t->telemetryId, comm->rank, t->func,
-                                t->count * elementSize, t->trafficBytes);
+  ncclTelemetryRecordCollective(t->telemetryId, comm->commHash, comm->nRanks, comm->rank,
+                                t->func, t->count * elementSize, t->trafficBytes);
   t->opHost = info->op;
   t->opDev = opDev; // C++ struct assignment
   t->chunkSteps = info->chunkSteps;

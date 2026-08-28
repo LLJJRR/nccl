@@ -1395,7 +1395,13 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
             void* phandle = &sub->pHandles[DIVUP(transmittedStepId, args->sliceSteps)%NCCL_STEPS];
             if (!checkedNetAttr++)
               setXferNetAttrs(proxyState, args, 1);
-            NCCLCHECK(proxyState->ncclNet->isend(resources->netSendComm, buff, size, resources->tpRank, sub->sendMhandle, phandle, sub->requests+buffSlot));
+            ncclTelemetrySetNetRequestContext(sub->telemetryProxyId, sub->telemetryCollectiveId,
+                                              sub->telemetryPlanId, proxyState->comm->rank,
+                                              sub->channelId, sub->peer, NCCL_TELEM_DIRECTION_SEND);
+            ncclResult_t netResult = proxyState->ncclNet->isend(resources->netSendComm, buff,
+              size, resources->tpRank, sub->sendMhandle, phandle, sub->requests+buffSlot);
+            ncclTelemetryClearNetRequestContext();
+            NCCLCHECK(netResult);
             if (sub->requests[buffSlot] != NULL) {
               TRACE(NCCL_NET, "sendProxy [%ld/%d/%d] Isend posted, req %p, buff %p, size %d, proto %d, myRank %d, channelId %d, mhandle %p", sub->transmitted, buffSlot, sub->nsteps, sub->requests[buffSlot], buff, size, p, proxyState->tpRank, sub->channelId, sub->sendMhandle);
               sub->transSize = size;
@@ -1573,7 +1579,15 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
         if (!checkedNetAttr++)
           setXferNetAttrs(proxyState, args, 0);
         if (ignoreCompletion) *requestPtr = (void *)NCCL_NET_OPTIONAL_RECV_COMPLETION;
-        NCCLCHECK(proxyState->ncclNet->irecv(resources->netRecvComm, subCount, ptrs, sizes, tags, mhandles, phandles, requestPtr));
+        ncclTelemetrySetNetRequestContext(subGroup->telemetryProxyId,
+                                          subGroup->telemetryCollectiveId,
+                                          subGroup->telemetryPlanId, proxyState->comm->rank,
+                                          subGroup->channelId, subGroup->peer,
+                                          NCCL_TELEM_DIRECTION_RECV);
+        ncclResult_t netResult = proxyState->ncclNet->irecv(resources->netRecvComm, subCount,
+          ptrs, sizes, tags, mhandles, phandles, requestPtr);
+        ncclTelemetryClearNetRequestContext();
+        NCCLCHECK(netResult);
         if (*requestPtr) {
           subGroup->recvRequestsCache[step%NCCL_STEPS] = *requestPtr;
           subGroup->recvRequestsSubCount = subCount;

@@ -66,11 +66,13 @@ counters support the proposed explanation.
 
 ## QP/WQE/CQE boundary
 
-The public NCCL NET plugin interface exposes opaque request handles and a
-`test()` completion result, but does not expose QP numbers, WQE IDs, or CQE
-timestamps.  The current trace therefore declares `qp_wqe_cqe=unsupported`
-instead of guessing those values.  A plugin-specific adapter can add those
-fields later without changing the core collective/channel/proxy schema.
+The in-tree IB transport now records request IDs, QP numbers, WQE `wr_id`,
+opcode, post timestamps, and CQE status/byte length in diagnostic mode.  The
+trace header advertises this as `qp_wqe_cqe=ib_internal_diagnostic`.  The
+public NCCL NET plugin interface remains opaque, so Socket and third-party
+plugins report no QP/WQE/CQE records rather than guessing them.  A
+plugin-specific adapter can add equivalent records later without changing the
+core collective/channel/proxy schema.
 
 The existing proxy timeline still distinguishes queue delay (enqueue to
 start), first-progress delay (start to first completed transfer), and proxy
@@ -88,3 +90,9 @@ For a two-node multi-GPU run, the deliverable should include:
    diagnostic capture when investigating a known stall.
 5. One controlled comparison such as `NCCL_IB_DISABLE=1` or `NCCL_IB_HCA` that
    changes the selected path and is reflected in both throughput and telemetry.
+
+In diagnostic mode, an IB trace should also contain `RDMA_REQUEST` records for
+WQE posts, CQEs, and request completion.  The report summarizes QP IDs,
+completion latency, unmatched posts, and non-zero WC status.  Pre-posted
+receive buffers and third-party NET plugins may not expose a one-to-one WQE
+mapping; those cases remain explicitly partial/unsupported.

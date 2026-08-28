@@ -30,6 +30,7 @@
 #include "timer.h"
 
 #include "ibvwrap.h"
+#include "telemetry.h"
 #include "mlx5/mlx5dvwrap.h"
 
 #define MAXSUFFIXSIZE 16
@@ -203,6 +204,8 @@ struct ncclIbRequest {
   struct ncclProfilerInfo pInfo[NCCL_NET_IB_MAX_RECVS];
 #endif
   uint64_t id;
+  ncclTelemetryNetRequestContext telemetryContext;
+  bool telemetryContextValid;
   int nreqs;
   union {
     struct {
@@ -587,4 +590,3 @@ ncclResult_t ncclIbFinalize(void* ctx);
 ncclResult_t ncclIbSetNetAttr(void *ctx, ncclNetAttr_t *netAttr);
 
 #endif
-

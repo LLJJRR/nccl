@@ -33,6 +33,8 @@ std::atomic<bool> initialized{false};
 std::atomic<uint64_t> collectiveIds{0};
 std::atomic<uint64_t> proxyIds{0};
 std::mutex stateMutex;
+thread_local ncclTelemetryNetRequestContext netRequestContext{};
+thread_local bool netRequestContextValid = false;
 
 struct ChannelPlanKey {
   uint64_t collectiveId;
@@ -81,7 +83,7 @@ void dump() {
   fwrite(&dropped, sizeof(dropped), 1, f);
   if (text != nullptr) fprintf(text, "HEADER version=%u event_size=%u events=%llu dropped=%llu "
                                "clock=monotonic_ns capabilities=proxy_progress,net_path,rdma_external_counters "
-                               "qp_wqe_cqe=unsupported\n",
+                               "qp_wqe_cqe=ib_internal_diagnostic\n",
                                version, eventSize, (unsigned long long)(end - begin),
                                (unsigned long long)dropped);
   for (uint64_t i = begin; i < end; ++i) {
@@ -90,8 +92,9 @@ void dump() {
     if (text == nullptr) continue;
     switch (e.eventType) {
     case NCCL_TELEM_COLLECTIVE_ENQUEUE:
-      fprintf(text, "[%llu ns] COLLECTIVE id=%llu rank=%u type=%s payload=%llu traffic=%llu\n",
-              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId, e.rank,
+      fprintf(text, "[%llu ns] COLLECTIVE id=%llu comm_id=0x%llx nranks=%llu rank=%u type=%s payload=%llu traffic=%llu\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.planId, (unsigned long long)e.value, e.rank,
               ncclFuncToString((ncclFunc_t)e.collective), (unsigned long long)e.payloadBytes,
               (unsigned long long)e.trafficBytes);
       break;
@@ -202,6 +205,22 @@ void dump() {
               e.protocol, e.reserved & 0xff, (e.reserved >> 8) & 0xff,
               (unsigned long long)e.payloadBytes, (unsigned long long)e.trafficBytes);
       break;
+    case NCCL_TELEM_RDMA_REQUEST:
+      fprintf(text, "[%llu ns] RDMA_REQUEST proxy=%llu coll=%llu plan=%llu rank=%u ch=%u "
+              "peer=%u direction=%s request=%llu qp=%u wr_id=%llu opcode=%u status=%u "
+              "phase=%u bytes=%llu\n",
+              (unsigned long long)e.timestampNs,
+              (unsigned long long)e.planId,
+              (unsigned long long)e.collectiveId, 0ull,
+              e.rank, e.channel, e.algorithm,
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
+              (unsigned long long)(e.value & 0x00ffffffffffffffull), e.protocol,
+              (unsigned long long)e.trafficBytes, uint32_t((e.value >> 56) & 0xff),
+              (e.collective >> 8) & 0xff,
+              e.reserved & 0xff,
+              (unsigned long long)e.payloadBytes);
+      break;
     default:
       fprintf(text, "[%llu ns] EVENT type=%u\n", (unsigned long long)e.timestampNs, e.eventType);
       break;
@@ -266,8 +285,9 @@ uint64_t ncclTelemetryNextProxyId() {
   return proxyIds.fetch_add(1, std::memory_order_relaxed);
 }
 
-void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collective,
-                                   size_t payloadBytes, size_t trafficBytes) {
+void ncclTelemetryRecordCollective(uint64_t collectiveId, uint64_t commId, int nranks,
+                                   int rank, int collective, size_t payloadBytes,
+                                   size_t trafficBytes) {
   {
     std::lock_guard<std::mutex> lock(stateMutex);
     for (auto it = channelPlans.begin(); it != channelPlans.end();) {
@@ -277,8 +297,8 @@ void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collecti
         ++it;
     }
   }
-  record(NCCL_TELEM_COLLECTIVE_ENQUEUE, collectiveId, 0, rank, -1, collective, 0, 0,
-         payloadBytes, trafficBytes, 0);
+  record(NCCL_TELEM_COLLECTIVE_ENQUEUE, collectiveId, commId, rank, -1, collective, 0, 0,
+         payloadBytes, trafficBytes, uint64_t(nranks));
 }
 
 void ncclTelemetryRecordChannel(uint64_t collectiveId, uint64_t planId, int rank,
@@ -310,6 +330,40 @@ void ncclTelemetryRecordProxyProgress(uint64_t proxyId, uint64_t collectiveId,
   uint32_t reserved = (phase & 0xff) | ((status & 0xff) << 8);
   record(NCCL_TELEM_PROXY_PROGRESS, collectiveId, planId, rank, channel, direction, peer,
          transport, expectedBytes, progressedBytes, proxyId, reserved);
+}
+
+void ncclTelemetrySetNetRequestContext(uint64_t proxyId, uint64_t collectiveId,
+                                       uint64_t planId, int rank, int channel, int peer,
+                                       int direction) {
+  netRequestContext = {proxyId, collectiveId, planId, rank, channel, peer, direction};
+  netRequestContextValid = true;
+}
+
+void ncclTelemetryClearNetRequestContext() {
+  netRequestContextValid = false;
+}
+
+bool ncclTelemetryGetNetRequestContext(ncclTelemetryNetRequestContext* context) {
+  if (!netRequestContextValid || context == nullptr) return false;
+  *context = netRequestContext;
+  return true;
+}
+
+void ncclTelemetryRecordRdmaRequest(const ncclTelemetryNetRequestContext* context,
+                                    uint64_t requestId, uint32_t qpNum, uint64_t wrId,
+                                    uint32_t opcode, uint32_t status, uint64_t bytes,
+                                    uint32_t phase) {
+  if (context == nullptr || ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
+  // Event-specific layout: planId=full proxy id, algorithm=peer, protocol=QP
+  // number, traffic=wr_id, value=request id with opcode in the high byte,
+  // collective carries direction/status, and reserved carries phase. The
+  // original plan is recovered through the proxy event.
+  uint32_t reserved = phase & 0xff;
+  uint64_t requestValue = (requestId & 0x00ffffffffffffffull) |
+                          (uint64_t(opcode & 0xff) << 56);
+  record(NCCL_TELEM_RDMA_REQUEST, context->collectiveId, context->proxyId, context->rank,
+         context->channel, context->direction | ((status & 0xff) << 8), context->peer,
+         qpNum, bytes, wrId, requestValue, reserved);
 }
 
 void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next) {

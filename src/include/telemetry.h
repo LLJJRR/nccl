@@ -23,7 +23,8 @@ enum ncclTelemetryEventType : uint16_t {
   NCCL_TELEM_CHANNEL_TRANSFER = 12,
   NCCL_TELEM_CHANNEL_SUMMARY = 13,
   NCCL_TELEM_NET_PATH = 14,
-  NCCL_TELEM_PROXY_PROGRESS = 15
+  NCCL_TELEM_PROXY_PROGRESS = 15,
+  NCCL_TELEM_RDMA_REQUEST = 16
 };
 
 enum ncclTelemetryLevel : uint8_t {
@@ -53,6 +54,22 @@ enum ncclTelemetryProxyPhase : uint8_t {
   NCCL_TELEM_PROXY_ERROR = 4
 };
 
+enum ncclTelemetryRdmaPhase : uint8_t {
+  NCCL_TELEM_RDMA_WQE_POST = 0,
+  NCCL_TELEM_RDMA_CQE = 1,
+  NCCL_TELEM_RDMA_REQUEST_COMPLETE = 2
+};
+
+struct ncclTelemetryNetRequestContext {
+  uint64_t proxyId;
+  uint64_t collectiveId;
+  uint64_t planId;
+  int rank;
+  int channel;
+  int peer;
+  int direction;
+};
+
 struct ncclTelemetryEvent {
   uint64_t timestampNs;
   uint64_t collectiveId;
@@ -79,8 +96,9 @@ struct ncclTelemetryChannelSummary {
   uint16_t channel;
 };
 
-void ncclTelemetryRecordCollective(uint64_t collectiveId, int rank, int collective,
-                                   size_t payloadBytes, size_t trafficBytes);
+void ncclTelemetryRecordCollective(uint64_t collectiveId, uint64_t commId, int nranks,
+                                   int rank, int collective, size_t payloadBytes,
+                                   size_t trafficBytes);
 uint64_t ncclTelemetryNextCollectiveId();
 uint64_t ncclTelemetryNextProxyId();
 void ncclTelemetryFlush();
@@ -96,6 +114,15 @@ void ncclTelemetryRecordProxyProgress(uint64_t proxyId, uint64_t collectiveId,
                                       int direction, int transport, uint64_t expectedBytes,
                                       uint64_t progressedBytes, uint32_t phase,
                                       uint32_t status);
+void ncclTelemetrySetNetRequestContext(uint64_t proxyId, uint64_t collectiveId,
+                                       uint64_t planId, int rank, int channel, int peer,
+                                       int direction);
+void ncclTelemetryClearNetRequestContext();
+bool ncclTelemetryGetNetRequestContext(ncclTelemetryNetRequestContext* context);
+void ncclTelemetryRecordRdmaRequest(const ncclTelemetryNetRequestContext* context,
+                                    uint64_t requestId, uint32_t qpNum, uint64_t wrId,
+                                    uint32_t opcode, uint32_t status, uint64_t bytes,
+                                    uint32_t phase);
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport,
                                   int direction, int pathType);
 void ncclTelemetryRecordNetPath(int rank, int peer, int channel, int connIndex, int direction,
