@@ -410,6 +410,9 @@ if proxy_events:
         rdma = rdma_events.get((proxy_rank, proxy_id), [])
         rdma = [event for event in rdma if event['rank'] == identity['rank'] and
                 event['channel'] == identity['channel']]
+        proxy_posts = [post for (post_rank, post_proxy, _), post_events in rdma_posts.items()
+                       if post_rank == proxy_rank and post_proxy == proxy_id
+                       for post in post_events if post['channel'] == identity['channel']]
         if rdma:
             posts = [event for event in rdma if event['phase'] == 0]
             cqes = [event for event in rdma if event['phase'] == 1]
@@ -446,6 +449,14 @@ if proxy_events:
             if statuses: fields.append('diagnostic=rdma_wc_error')
             if unmatched_posts and not dropped:
                 fields.append('diagnostic=missing_signaled_cqe')
+        if proxy_posts:
+            fields.append(f'rdma_post_calls={len(proxy_posts)}')
+            fields.append(f'rdma_post_latency_max_ns={max(p["latency"] for p in proxy_posts)}')
+            failures = [p for p in proxy_posts if p['status'] != 0]
+            fields.append(f'rdma_post_failures={len(failures)}')
+            if failures:
+                fields.append('rdma_post_bad_wr_ids=' + ','.join(str(p['bad_wr']) for p in failures))
+                fields.append('diagnostic=ibv_post_send_failed')
         if not complete and not error: fields.append('diagnostic=incomplete_proxy')
         if last and complete and complete['timestamp'] - last['timestamp'] > 1000000:
             fields.append('diagnostic=proxy_completion_bookkeeping_stall')
