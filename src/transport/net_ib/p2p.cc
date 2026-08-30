@@ -54,7 +54,8 @@ ncclResult_t ncclIbPostSendTelemetry(struct ncclIbRequest* request,
 
 ncclResult_t ncclIbPostSendTelemetryOwners(struct ncclIbRequest** requests, int count,
                                             struct ibv_qp* qp,
-                                            struct ibv_send_wr* first) {
+                                            struct ibv_send_wr* first,
+                                            int* postedCount) {
   struct ibv_send_wr* badWr = NULL;
   uint32_t attempted = 0;
   for (struct ibv_send_wr* wr = first; wr != NULL; wr = wr->next) attempted++;
@@ -71,6 +72,7 @@ ncclResult_t ncclIbPostSendTelemetryOwners(struct ncclIbRequest** requests, int 
     for (struct ibv_send_wr* wr = first; wr != NULL; wr = wr->next, ++index)
       if (wr == badWr) { badIndex = index; break; }
   }
+  if (postedCount) *postedCount = badIndex >= 0 ? badIndex : int(attempted);
   for (int owner = 0; owner < count; ++owner) {
     struct ncclIbRequest* request = requests[owner];
     if (request == NULL || request->telemetryContextCount == 0) continue;
@@ -430,10 +432,11 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
       currWr = currWr->next;
     }
 #endif // ENABLE_TRACE
-    NCCLCHECK(ncclIbPostSendTelemetryOwners(reqs, nreqs, qp->qp, comm->wrs));
+    int postedChain = 0;
+    ncclResult_t postResult = ncclIbPostSendTelemetryOwners(reqs, nreqs, qp->qp, comm->wrs, &postedChain);
     uint32_t postedWrs = 0;
     uint64_t postedBytes = 0;
-    for (int r = 0; r < nreqs; r++) {
+    for (int r = 0; r < postedChain && r < nreqs; r++) {
       ncclIbRecordWr(reqs[r], qp->qp->qp_num, comm->wrs + r);
       postedWrs++;
       if (comm->wrs[r].sg_list) postedBytes += comm->wrs[r].sg_list->length;
@@ -445,6 +448,7 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
           (comm->wrs[r].send_flags & IBV_SEND_SIGNALED) != 0);
       }
     }
+    if (postResult != ncclSuccess) return postResult;
     if (reqs[0]->telemetryContextCount != 0 && lastWr != comm->wrs + nreqs - 1) {
       ncclIbRecordWr(reqs[0], qp->qp->qp_num, lastWr);
       postedWrs++;
