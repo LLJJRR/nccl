@@ -114,6 +114,10 @@ for control in $controls; do
           run_dir=$results_root/$run_name
           trace_dir=$run_dir/traces
           mkdir -p "$trace_dir"
+          # A rerun with the same output root must not reuse traces from an
+          # earlier attempt; otherwise OFF/trace-count validation can pass on
+          # stale rank files.
+          find "$trace_dir" -maxdepth 1 -type f -name 'nccl_telemetry.*' -delete
           export NCCL_TELEMETRY_DIR=$trace_dir
 
           if [ "$rdma_counters" = 1 ]; then snapshot_all_nodes "$run_dir" before; fi
