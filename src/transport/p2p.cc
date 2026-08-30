@@ -853,6 +853,12 @@ static ncclResult_t p2pSendProxyProgress(struct ncclProxyState* proxyState, stru
                                                sub->telemetryBytes * sub->done / sub->nsteps : 0,
                                              NCCL_TELEM_PROXY_FIRST_PROGRESS, 0);
           }
+          ncclTelemetryRecordTransfer(sub->telemetryCollectiveId, sub->telemetryPlanId,
+                                      args->opCount, proxyState->comm->rank, sub->channelId,
+                                      sub->peer, NCCL_TELEM_DIRECTION_SEND, 0, sub->done,
+                                      sub->nbytes > 0 ?
+                                      size_t(sub->nbytes) * args->sliceSteps / sub->nsteps : 0);
+          sub->done += args->sliceSteps;
           if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC) {
             ncclTelemetryRecordProxyProgress(sub->telemetryProxyId, sub->telemetryCollectiveId,
                                              sub->telemetryPlanId, proxyState->comm->rank,
@@ -862,12 +868,6 @@ static ncclResult_t p2pSendProxyProgress(struct ncclProxyState* proxyState, stru
                                                sub->telemetryBytes * sub->done / sub->nsteps : 0,
                                              NCCL_TELEM_PROXY_LAST_PROGRESS, 0);
           }
-          ncclTelemetryRecordTransfer(sub->telemetryCollectiveId, sub->telemetryPlanId,
-                                      args->opCount, proxyState->comm->rank, sub->channelId,
-                                      sub->peer, NCCL_TELEM_DIRECTION_SEND, 0, sub->done,
-                                      sub->nbytes > 0 ?
-                                      size_t(sub->nbytes) * args->sliceSteps / sub->nsteps : 0);
-          sub->done += args->sliceSteps;
           // Notify SHM
           resources->shm->recvMem.tail = sub->base + sub->done;
         }
