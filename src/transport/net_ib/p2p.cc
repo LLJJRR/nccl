@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <ctime>
+#include <cstring>
 
 NCCL_PARAM(IbArThreshold, "IB_AR_THRESHOLD", -2);
 int64_t ncclIbArThreshold = 8192;
@@ -76,9 +77,20 @@ ncclResult_t ncclIbPostSendTelemetryOwners(struct ncclIbRequest** requests, int 
     // ncclIbMultiSend builds one WR per owner. Report owner-local counts so a
     // shared post call is not mistaken for N copies of the whole chain.
     uint32_t ownerAttempted = count > 1 ? 1 : attempted;
+    // Multi-send may append one shared signaled WR for completion records.
+    // Attribute that WR to the last owner so the per-owner totals cover the
+    // complete chain without duplicating it for every request.
+    if (count > 1 && owner == count - 1 && attempted > uint32_t(count))
+      ownerAttempted += attempted - uint32_t(count);
     uint32_t posted = result == ncclSuccess ? ownerAttempted : 0;
     if (badWr != NULL && count > 1) {
-      posted = badIndex >= 0 && owner >= badIndex ? 0 : 1;
+      if (badIndex >= 0) {
+        uint32_t ownerEnd = owner == count - 1 ? attempted : uint32_t(owner + 1);
+        uint32_t ownerBegin = uint32_t(owner);
+        posted = badIndex <= int(ownerBegin) ? 0 :
+                 badIndex >= int(ownerEnd) ? ownerAttempted :
+                 badIndex - int(ownerBegin);
+      }
     } else if (badWr != NULL) {
       posted = 0;
       for (struct ibv_send_wr* wr = first; wr != NULL && wr != badWr; wr = wr->next) posted++;
