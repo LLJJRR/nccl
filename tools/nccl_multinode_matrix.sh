@@ -2,7 +2,7 @@
 set -euo pipefail
 
 : "${NCCL_TEST_DIR:?set NCCL_TEST_DIR to an MPI-enabled nccl-tests build directory}"
-: "${NCCL_LIB:?set NCCL_LIB to this NCCL build's lib directory}"
+: "${NCCL_LIB:?set NCCL_LIB to this NCCL build lib directory}"
 : "${NCCL_MPI_NP:?set NCCL_MPI_NP to the total number of MPI ranks}"
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
