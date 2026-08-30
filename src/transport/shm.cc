@@ -469,6 +469,15 @@ static ncclResult_t shmRecvProxyProgress(struct ncclProxyState* proxyState, stru
         if (res != cudaErrorNotReady) CUDACHECK(res);
         if (res == cudaSuccess) {
           sub->done += args->sliceSteps;
+          if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC) {
+            ncclTelemetryRecordProxyProgress(sub->telemetryProxyId, sub->telemetryCollectiveId,
+                                             sub->telemetryPlanId, proxyState->comm->rank,
+                                             sub->channelId, sub->peer, NCCL_TELEM_DIRECTION_RECV,
+                                             sub->telemetryTransport, sub->telemetryBytes,
+                                             sub->telemetryBytes > 0 && sub->nsteps > 0 ?
+                                               sub->telemetryBytes * sub->done / sub->nsteps : 0,
+                                             NCCL_TELEM_PROXY_LAST_PROGRESS, 0);
+          }
           // Notify GPU
           resources->ceRecvMem->tail = sub->base + sub->done;
         }
