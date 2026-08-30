@@ -199,7 +199,8 @@ ncclResult_t ncclIbGetRequest(struct ncclIbNetCommBase* base, struct ncclIbReque
     if (r->type == NCCL_NET_IB_REQ_UNUSED) {
       r->base = base;
       r->sock = NULL;
-      r->telemetryGeneration = telemetryRequestGenerations.fetch_add(1, std::memory_order_relaxed);
+      r->telemetryGeneration = ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC ?
+        telemetryRequestGenerations.fetch_add(1, std::memory_order_relaxed) : 0;
       memset(r->devBases, 0, sizeof(r->devBases));
       memset(r->events, 0, sizeof(r->events));
       r->telemetryContextCount = uint8_t(ncclTelemetryGetNetRequestContexts(
