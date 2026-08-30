@@ -563,7 +563,6 @@ ncclResult_t ncclGinIbProxyIPut(void *ginCtx, int context, uint64_t srcOff, void
   sge.length = size;  // Size of the transfer
   sge.lkey = lkey;  // Local key
 
-  struct ibv_send_wr* bad_wr;
   NCCLCHECK(ncclIbPostSendTelemetry(req, qp->qp, &wr));
   ncclIbAddEvent(req, qp->devIndex);
 
@@ -615,7 +614,6 @@ ncclResult_t ncclGinIbProxyIGet(void *ginCtx, int context, uint64_t remoteOffset
   sge.length = size;
   sge.lkey = lkey;
 
-  struct ibv_send_wr* bad_wr;
   NCCLCHECK(ncclIbPostSendTelemetry(req, qp->qp, &wr));
   ncclIbAddEvent(req, qp->devIndex);
 
@@ -698,7 +696,6 @@ ncclResult_t ncclGinIbProxyIPutSignal(void *ginCtx, int context, uint64_t srcOff
   sge[1].lkey = comm->devs[devIndex].putSignalScratchpadMr->lkey;
 
   // Send the put and the signal in one go
-  struct ibv_send_wr* bad_wr;
   NCCLCHECK(ncclIbPostSendTelemetry(req, qp->qp, size > 0 ? &wr[0] : &wr[1]));
   ncclIbAddEvent(req, qp->devIndex);
   *request = req;
@@ -789,7 +786,6 @@ ncclResult_t ncclGinIbProxyIFlush(void *ginCtx, int context, void* mhandle, uint
 
   TRACE(NCCL_NET, "NET/IB: %s: Posting a flush request (req=%p, comm=%p, wr_id=%ld)", __func__, req, req->base, wr.wr_id);
   TIME_START(4);
-  struct ibv_send_wr* bad_wr;
   NCCLCHECK(ncclIbPostSendTelemetry(req, qp->qp, &wr));
   TIME_STOP(4);
 

@@ -396,7 +396,6 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
       lastWr->wr.rdma.rkey = comm->remCmplsRecords.rkeys[devIndex];
     }
 
-    struct ibv_send_wr* bad_wr;
 #ifdef NCCL_ENABLE_NET_PROFILING
     // QP profiling loop
     for (int r=0; r<nreqs; r++) {
@@ -623,7 +622,6 @@ ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, struct ncclIbRequest* r
 
   TRACE(NCCL_NET, "NET/IB: %s: Posting a CTS (req=%p, comm=%p, id=%ld, slot=%d, nreqs=%d, wr_id=%ld, opcode=%d, send_flags=%d, qp_num=%u)", __func__, req, req->base, req->id, slot, req->nreqs, wr.wr_id, wr.opcode, wr.send_flags, ctsQp->qp->qp_num);
 
-  struct ibv_send_wr* bad_wr;
   NCCLCHECK(ncclIbPostSendTelemetry(req, ctsQp->qp, &wr));
   // CTS belongs to the receive request, but its occasionally-signaled SQ
   // batching can outlive that request. Record its WR/SGE shape without
@@ -783,7 +781,6 @@ ncclResult_t ncclIbIflush(void* recvComm, int n, void** data, int* sizes, void**
 
     TRACE(NCCL_NET, "NET/IB: %s: Posting a flush request (req=%p, comm=%p, wr_id=%ld)", __func__, req, req->base, wr.wr_id);
     TIME_START(4);
-    struct ibv_send_wr* bad_wr;
     NCCLCHECK(ncclIbPostSendTelemetry(req, comm->devs[i].gpuFlush.qp.qp, &wr));
     TIME_STOP(4);
 

@@ -457,7 +457,6 @@ static ncclResult_t ncclIbResiliencyProbePost(struct ncclIbResiliencySend* sendR
 
   INFO(NCCL_NET, "NET/IB: %s: Posting probe (slot=%d, id=%ld, devIndex=%d, qp_num=%u)", __func__, slot, failedSendRequest->request->id, devIndex, probingQp->qp->qp_num);
 
-  struct ibv_send_wr* bad_wr;
   NCCLCHECK(ncclIbPostSendTelemetry(failedSendRequest->request, probingQp->qp, &probeWr));
   failedSendRequest->state = ncclIbResiliencyRequestStateProbePosted;
   resDev->nOutstandingProbes++;
