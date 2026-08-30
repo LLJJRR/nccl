@@ -64,17 +64,28 @@ ncclResult_t ncclIbPostSendTelemetryOwners(struct ncclIbRequest** requests, int 
     WARN("ibv_post_send() failed with error %s, Bad WR %p, First WR %p",
          strerror(rawStatus), badWr, first);
   uint64_t end = ncclIbTelemetryNowNs();
+  int badIndex = -1;
+  if (badWr != NULL) {
+    int index = 0;
+    for (struct ibv_send_wr* wr = first; wr != NULL; wr = wr->next, ++index)
+      if (wr == badWr) { badIndex = index; break; }
+  }
   for (int owner = 0; owner < count; ++owner) {
     struct ncclIbRequest* request = requests[owner];
     if (request == NULL || request->telemetryContextCount == 0) continue;
-    uint32_t posted = result == ncclSuccess ? attempted : 0;
-    if (badWr != NULL) {
+    // ncclIbMultiSend builds one WR per owner. Report owner-local counts so a
+    // shared post call is not mistaken for N copies of the whole chain.
+    uint32_t ownerAttempted = count > 1 ? 1 : attempted;
+    uint32_t posted = result == ncclSuccess ? ownerAttempted : 0;
+    if (badWr != NULL && count > 1) {
+      posted = badIndex >= 0 && owner >= badIndex ? 0 : 1;
+    } else if (badWr != NULL) {
       posted = 0;
       for (struct ibv_send_wr* wr = first; wr != NULL && wr != badWr; wr = wr->next) posted++;
     }
     for (int i = 0; i < request->telemetryContextCount; ++i)
       ncclTelemetryRecordRdmaPost(request->telemetryContexts + i,
-        request->telemetryGeneration, qp ? qp->qp_num : 0, attempted, posted,
+        request->telemetryGeneration, qp ? qp->qp_num : 0, ownerAttempted, posted,
         begin, end, rawStatus, badWr ? badWr->wr_id : 0);
   }
   return result;
