@@ -30,7 +30,9 @@ enum ncclTelemetryEventType : uint16_t {
   NCCL_TELEM_RDMA_SGE = 19,
   NCCL_TELEM_RDMA_QP_DEPTH = 20,
   NCCL_TELEM_RDMA_CQ_POLL = 21,
-  NCCL_TELEM_RDMA_CQE_DETAIL = 22
+  NCCL_TELEM_RDMA_CQE_DETAIL = 22,
+  NCCL_TELEM_RDMA_POST = 23,
+  NCCL_TELEM_RDMA_ASYNC_ERROR = 24
 };
 
 enum ncclTelemetryLevel : uint8_t {
@@ -57,7 +59,8 @@ enum ncclTelemetryProxyPhase : uint8_t {
   NCCL_TELEM_PROXY_START = 1,
   NCCL_TELEM_PROXY_FIRST_PROGRESS = 2,
   NCCL_TELEM_PROXY_COMPLETE = 3,
-  NCCL_TELEM_PROXY_ERROR = 4
+  NCCL_TELEM_PROXY_ERROR = 4,
+  NCCL_TELEM_PROXY_LAST_PROGRESS = 5
 };
 
 enum ncclTelemetryRdmaPhase : uint8_t {
@@ -171,6 +174,14 @@ void ncclTelemetryRecordRdmaCqeDetail(const ncclTelemetryNetRequestContext* cont
                                       uint32_t opcode, uint32_t status, uint32_t vendorErr,
                                       uint32_t srcQp, uint32_t wcFlags, uint32_t immData,
                                       uint32_t byteLen);
+void ncclTelemetryRecordRdmaPost(const ncclTelemetryNetRequestContext* context,
+                                 uint64_t requestId, uint32_t qpNum,
+                                 uint32_t attemptedWrs, uint32_t postedWrs,
+                                 uint64_t beginNs, uint64_t endNs, int status,
+                                 uint64_t badWrId);
+void ncclTelemetryRecordRdmaAsyncError(int rank, int devIndex, int port,
+                                       uint32_t eventType, uint32_t qpNum,
+                                       uint64_t cqId);
 void ncclTelemetryRecordTransport(int rank, int channel, int peer, int connIndex, int transport,
                                   int direction, int pathType);
 void ncclTelemetryRecordNetPath(int rank, int peer, int channel, int connIndex, int direction,

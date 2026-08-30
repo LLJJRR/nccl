@@ -796,6 +796,15 @@ static ncclResult_t progressOps(struct ncclProxyState* proxyState, struct ncclPr
     if (op->state == ncclProxyOpNone || ret != ncclSuccess) {
       for (int s = 0; s < op->nsubs; ++s) {
         struct ncclProxySubArgs* sub = op->subs + s;
+        if (sub->telemetryFirstProgress) {
+          ncclTelemetryRecordProxyProgress(sub->telemetryProxyId, sub->telemetryCollectiveId,
+                                           sub->telemetryPlanId, proxyState->comm->rank,
+                                           sub->channelId, sub->peer, sub->telemetryDirection,
+                                           sub->telemetryTransport, sub->telemetryBytes,
+                                           sub->telemetryBytes > 0 && sub->nsteps > 0 ?
+                                             sub->telemetryBytes * sub->done / sub->nsteps : 0,
+                                           NCCL_TELEM_PROXY_LAST_PROGRESS, uint32_t(ret));
+        }
         ncclTelemetryRecordProxyProgress(sub->telemetryProxyId, sub->telemetryCollectiveId,
                                          sub->telemetryPlanId, proxyState->comm->rank,
                                          sub->channelId, sub->peer,

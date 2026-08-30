@@ -237,6 +237,17 @@ poll busy time, and CQE latency avg/p50/p95/p99/max. It can surface
 errors. `low_qp_feed_candidate` is deliberately a candidate diagnosis because
 small transfers can legitimately keep only one WR outstanding.
 
+Proxy progress emits `FIRST_PROGRESS`, a completion-time `LAST_PROGRESS`, and
+the terminal `COMPLETE`/`ERROR` event. The report derives the largest observed
+progress interval and the final progress-to-completion delay. Level-2 IB
+captures also emit `RDMA_POST` around each `ibv_post_send()` call, including
+attempted/posted WR counts, latency, return status, and `bad_wr_id`; a failed
+post never claims that the suffix of the chain reached hardware. IB async
+events for device, CQ, and QP fatal/request/access errors are emitted as
+`RDMA_ASYNC_ERROR` with explicit `association=unavailable` when no portable
+request mapping exists. Request telemetry IDs use a monotonic generation so
+pool reuse cannot merge separate requests.
+
 Limitations are explicit: pre-posted receive queues expose exact CQE and global
 RQ depth but not a one-to-one request post timestamp; Socket and third-party NET
 plugins do not expose internal verbs objects; cross-node monotonic-clock

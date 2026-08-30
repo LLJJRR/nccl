@@ -18,6 +18,15 @@ proxy_progress = re.compile(
     r"peer=(\d+) direction=(SEND|RECV|UNKNOWN) transport=(\d+) phase=(\d+) status=(\d+) "
     r"expected_bytes=(\d+) progressed_bytes=(\d+)"
 )
+rdma_post = re.compile(
+    r"\[(\d+) ns\] RDMA_POST request=(\d+) proxy=(\d+) rank=(\d+) ch=(\d+) peer=(\d+) "
+    r"direction=(SEND|RECV|UNKNOWN) qp=(\d+) attempted_wrs=(\d+) posted_wrs=(\d+) "
+    r"status=(-?\d+) bad_wr_id=(\d+) latency_ns=(\d+)"
+)
+rdma_async_error = re.compile(
+    r"\[(\d+) ns\] RDMA_ASYNC_ERROR rank=(\-?\d+) dev=(\-?\d+) port=(\-?\d+) "
+    r"event_type=(\d+) qp=(\d+) cq_id=0x([0-9a-fA-F]+) association=(\S+)"
+)
 rdma_request = re.compile(
     r"\[(\d+) ns\] RDMA_REQUEST proxy=(\d+) coll=(\d+) plan=(\S+) rank=(\d+) ch=(\d+) "
     r"peer=(\d+) direction=(SEND|RECV|UNKNOWN) request=(\d+) qp=(\d+) wr_id=(\d+) "
@@ -75,6 +84,8 @@ rdma_sges = defaultdict(list)
 rdma_depths = defaultdict(list)
 rdma_polls = defaultdict(list)
 rdma_cqe_details = defaultdict(list)
+rdma_posts = defaultdict(list)
+rdma_async_errors = []
 for path in sys.argv[1:]:
     with open(path, errors="replace") as f:
         for line in f:
@@ -123,6 +134,20 @@ for path in sys.argv[1:]:
                     'completion_expected': int(completion_expected) if completion_expected is not None else 1,
                     'bytes': int(bytes_)
                 })
+            m = rdma_post.search(line)
+            if m:
+                ts, request_id, proxy_id, rank, ch, peer, direction, qp, attempted, posted, status, bad_wr, latency = m.groups()
+                rdma_posts[(int(rank), int(proxy_id), int(request_id))].append({
+                    'timestamp': int(ts), 'channel': int(ch), 'peer': int(peer),
+                    'direction': direction, 'qp': int(qp), 'attempted': int(attempted),
+                    'posted': int(posted), 'status': int(status), 'bad_wr': int(bad_wr),
+                    'latency': int(latency)})
+            m = rdma_async_error.search(line)
+            if m:
+                ts, rank, dev, port, event_type, qp, cq_id, association = m.groups()
+                rdma_async_errors.append({'timestamp': int(ts), 'rank': int(rank), 'dev': int(dev),
+                                          'port': int(port), 'event_type': int(event_type),
+                                          'qp': int(qp), 'cq_id': cq_id, 'association': association})
             m = rdma_request_state.search(line)
             if m:
                 ts, request_id, proxy_id, rank, ch, typ, state, expected, posted, completed, wrs, cqes = map(int, m.groups())
@@ -267,6 +292,7 @@ if rdma_states:
         depths = rdma_depths.get(key, [])
         polls = rdma_polls.get(key, [])
         cqes = rdma_cqe_details.get(key, [])
+        posts = rdma_posts.get(key, [])
         associations = request_associations.get(key, [])
         owner_counts = [event['owner_count'] for event in associations if event['owner_count'] > 1]
         fields = [f'request={request_id}', f'proxy={proxy_id}', f'rank={rank}',
@@ -275,6 +301,13 @@ if rdma_states:
                   f'completed_bytes={latest["completed"]}', f'wrs={len(wrs)}',
                   f'sges={len(sges)}', f'sge_bytes={sum(sge["length"] for sge in sges)}',
                   f'cqes={len(cqes)}']
+        if posts:
+            fields.extend((f'post_calls={len(posts)}',
+                           f'post_latency_max_ns={max(p["latency"] for p in posts)}',
+                           f'post_failures={sum(p["status"] != 0 for p in posts)}'))
+            failed = [p for p in posts if p['status'] != 0]
+            if failed:
+                fields.append('bad_wr_ids=' + ','.join(str(p['bad_wr']) for p in failed))
         if owner_counts:
             fields.append(f'grouped_owner_count={max(owner_counts)}')
         phase_names = ((0, 1, 'create_to_ready_ns'), (1, 2, 'ready_to_post_begin_ns'),
@@ -327,6 +360,9 @@ if rdma_states:
         if any(cqe['status'] or cqe['vendor'] for cqe in cqes): diagnostics.append('rdma_wc_or_vendor_error')
         if depths and latest['expected'] >= 1048576 and max(depth['outstanding'] for depth in depths) <= 1:
             diagnostics.append('low_qp_feed_candidate')
+        if posts and any(p['status'] != 0 for p in posts): diagnostics.append('ibv_post_send_failed')
+        if posts and max(p['latency'] for p in posts) > 1000000: diagnostics.append('verbs_post_slow')
+        if polls and empty_polls == poll_calls and not cqes: diagnostics.append('cq_polled_continuously_empty')
         if diagnostics: fields.append('diagnostics=' + ','.join(diagnostics))
         print('  rdma_request=' + ' '.join(fields))
     if all_completion_latencies:
@@ -353,6 +389,7 @@ if proxy_events:
         duration = complete['timestamp'] - start['timestamp'] if complete and start else None
         expected = (complete or first or start or enqueue)['expected']
         progressed = (complete or first or start or enqueue)['progressed']
+        last = by_phase.get(5)
         rate = float(progressed) * 1e9 / duration if duration and duration > 0 else None
         fields = [f'id={proxy_id}', f"coll={identity['collective']}",
                   f"plan={identity['plan']}", f"rank={identity['rank']}",
@@ -361,6 +398,12 @@ if proxy_events:
                   f"expected_bytes={expected}"]
         if queue_delay is not None: fields.append(f'queue_delay_ns={queue_delay}')
         if first_delay is not None: fields.append(f'first_progress_delay_ns={first_delay}')
+        progress_times = sorted(entry['timestamp'] for entry in entries
+                                if entry['phase'] in (2, 5))
+        if len(progress_times) >= 2:
+            fields.append(f'max_progress_gap_ns={max(b - a for a, b in zip(progress_times, progress_times[1:]))}')
+        if last and complete:
+            fields.append(f'last_progress_to_complete_ns={max(0, complete["timestamp"] - last["timestamp"])}')
         if duration is not None: fields.append(f'proxy_duration_ns={duration}')
         if rate is not None: fields.append(f'progress_rate_Bps={rate:.1f}')
         if error: fields.append(f"error_status={error['status']}")
@@ -404,7 +447,13 @@ if proxy_events:
             if unmatched_posts and not dropped:
                 fields.append('diagnostic=missing_signaled_cqe')
         if not complete and not error: fields.append('diagnostic=incomplete_proxy')
+        if last and complete and complete['timestamp'] - last['timestamp'] > 1000000:
+            fields.append('diagnostic=proxy_completion_bookkeeping_stall')
         print('  proxy_timeline=' + ' '.join(fields))
+if rdma_async_errors:
+    print(f'rdma_async_errors={len(rdma_async_errors)}')
+    for event in rdma_async_errors:
+        print('  rdma_async_error=' + ' '.join(f'{k}={v}' for k, v in event.items()))
 if summaries:
     print(f'channel_summaries={len(summaries)}')
     collective_windows = defaultdict(lambda: {'bytes': 0, 'duration': 0, 'channels': 0})

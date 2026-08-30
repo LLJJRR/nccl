@@ -213,6 +213,22 @@ void dump() {
               e.protocol, e.reserved & 0xff, (e.reserved >> 8) & 0xff,
               (unsigned long long)e.payloadBytes, (unsigned long long)e.trafficBytes);
       break;
+    case NCCL_TELEM_RDMA_POST:
+      fprintf(text, "[%llu ns] RDMA_POST request=%llu proxy=%llu rank=%u ch=%u peer=%u direction=%s qp=%u attempted_wrs=%u posted_wrs=%u status=%d bad_wr_id=%llu latency_ns=%llu\n",
+              (unsigned long long)e.timestampNs, (unsigned long long)e.collectiveId,
+              (unsigned long long)e.planId, e.rank, e.channel, e.algorithm,
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_SEND ? "SEND" :
+              (e.collective & 0xff) == NCCL_TELEM_DIRECTION_RECV ? "RECV" : "UNKNOWN",
+              e.protocol, e.reserved & 0xffff, e.reserved >> 16,
+              int32_t(e.trafficBytes), (unsigned long long)e.value,
+              (unsigned long long)e.payloadBytes);
+      break;
+    case NCCL_TELEM_RDMA_ASYNC_ERROR:
+      fprintf(text, "[%llu ns] RDMA_ASYNC_ERROR rank=%d dev=%d port=%d event_type=%u qp=%u cq_id=0x%llx association=unavailable\n",
+              (unsigned long long)e.timestampNs, int32_t(e.rank), int16_t(e.channel), int16_t(e.protocol),
+              e.algorithm, uint32_t(e.value >> 32),
+              (unsigned long long)(e.value & 0xffffffffull));
+      break;
     case NCCL_TELEM_RDMA_REQUEST:
       fprintf(text, "[%llu ns] RDMA_REQUEST proxy=%llu coll=%llu plan=unavailable rank=%u ch=%u "
               "peer=%u direction=%s request=%llu qp=%u wr_id=%llu opcode=%u status=%u "
@@ -522,6 +538,26 @@ void ncclTelemetryRecordRdmaCqeDetail(const ncclTelemetryNetRequestContext* cont
   uint64_t value = (uint64_t(srcQp) << 32) | immData;
   record(NCCL_TELEM_RDMA_CQE_DETAIL, requestId, context->proxyId, context->rank,
          context->channel, collective, context->peer, qpNum, byteLen, wrId, value, reserved);
+}
+
+void ncclTelemetryRecordRdmaPost(const ncclTelemetryNetRequestContext* context,
+                                 uint64_t requestId, uint32_t qpNum,
+                                 uint32_t attemptedWrs, uint32_t postedWrs,
+                                 uint64_t beginNs, uint64_t endNs, int status,
+                                 uint64_t badWrId) {
+  if (context == nullptr || ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
+  uint32_t reserved = (attemptedWrs & 0xffff) | ((postedWrs & 0xffff) << 16);
+  record(NCCL_TELEM_RDMA_POST, requestId, context->proxyId, context->rank,
+         context->channel, context->direction, context->peer, qpNum,
+         endNs >= beginNs ? endNs - beginNs : 0, int64_t(status), badWrId, reserved);
+}
+
+void ncclTelemetryRecordRdmaAsyncError(int rank, int devIndex, int port,
+                                       uint32_t eventType, uint32_t qpNum,
+                                       uint64_t cqId) {
+  if (ncclTelemetryLevel() < NCCL_TELEM_DIAGNOSTIC) return;
+  record(NCCL_TELEM_RDMA_ASYNC_ERROR, 0, 0, rank, devIndex, 0, eventType, port,
+         0, 0, 0, (uint64_t(qpNum) << 32) | (cqId & 0xffffffffull), 0);
 }
 
 void ncclTelemetryRecordRingEdge(int rank, int channel, int prev, int next) {

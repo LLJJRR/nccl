@@ -25,6 +25,7 @@ NCCL_PARAM(TelemetryFaultIbPollDelayChannel, "TELEMETRY_FAULT_IB_POLL_DELAY_CHAN
 
 const char* ncclIbReqTypeStr[] = { "Unused", "Send", "Recv", "Flush", "IPut" };
 static std::atomic<bool> telemetryFaultIbPollDelayInjected{false};
+static std::atomic<uint64_t> telemetryRequestGenerations{1};
 
 static inline void ncclIbRecordRequestTelemetry(struct ncclIbRequest* request,
                                                 uint32_t qpNum, uint64_t wrId,
@@ -32,7 +33,7 @@ static inline void ncclIbRecordRequestTelemetry(struct ncclIbRequest* request,
                                                 uint64_t bytes, uint32_t phase,
                                                 bool completionExpected = false) {
   for (int i = 0; i < request->telemetryContextCount; ++i) {
-    ncclTelemetryRecordRdmaRequest(request->telemetryContexts + i, request->id, qpNum,
+    ncclTelemetryRecordRdmaRequest(request->telemetryContexts + i, request->telemetryGeneration, qpNum,
                                    wrId, opcode, status, bytes, phase, i,
                                    request->telemetryContextCount, completionExpected);
   }
@@ -44,6 +45,29 @@ static inline uint64_t ncclIbTelemetryNowNs() {
   return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
 }
 
+ncclResult_t ncclIbPostSendTelemetry(struct ncclIbRequest* request,
+                                     struct ibv_qp* qp,
+                                     struct ibv_send_wr* first) {
+  struct ibv_send_wr* badWr = NULL;
+  uint32_t attempted = 0;
+  for (struct ibv_send_wr* wr = first; wr != NULL; wr = wr->next) attempted++;
+  uint64_t begin = ncclIbTelemetryNowNs();
+  ncclResult_t result = wrap_ibv_post_send(qp, first, &badWr);
+  uint64_t end = ncclIbTelemetryNowNs();
+  if (request != NULL && request->telemetryContextCount != 0) {
+    uint32_t posted = result == ncclSuccess ? attempted : 0;
+    if (badWr != NULL) {
+      posted = 0;
+      for (struct ibv_send_wr* wr = first; wr != NULL && wr != badWr; wr = wr->next) posted++;
+    }
+    for (int i = 0; i < request->telemetryContextCount; ++i)
+      ncclTelemetryRecordRdmaPost(request->telemetryContexts + i,
+        request->telemetryGeneration, qp ? qp->qp_num : 0, attempted, posted,
+        begin, end, int(result), badWr ? badWr->wr_id : 0);
+  }
+  return result;
+}
+
 static inline bool ncclIbTelemetryDetailed(const struct ncclIbRequest* request) {
   return request->telemetryContextCount != 0 &&
          ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC;
@@ -52,7 +76,7 @@ static inline bool ncclIbTelemetryDetailed(const struct ncclIbRequest* request) 
 static inline void ncclIbRecordRequestState(struct ncclIbRequest* request, uint32_t state) {
   if (!ncclIbTelemetryDetailed(request)) return;
   for (int i = 0; i < request->telemetryContextCount; ++i) {
-    ncclTelemetryRecordRdmaRequestState(request->telemetryContexts + i, request->id,
+    ncclTelemetryRecordRdmaRequestState(request->telemetryContexts + i, request->telemetryGeneration,
       request->type, state, request->telemetryExpectedBytes, request->telemetryPostedBytes,
       request->telemetryCompletedBytes, request->telemetryWrCount,
       request->telemetryCqeCount);
@@ -67,11 +91,11 @@ static inline void ncclIbRecordWr(struct ncclIbRequest* request, uint32_t qpNum,
   for (int s = 0; s < wr->num_sge; ++s) bytes += wr->sg_list[s].length;
   for (int i = 0; i < request->telemetryContextCount; ++i) {
     const ncclTelemetryNetRequestContext* context = request->telemetryContexts + i;
-    ncclTelemetryRecordRdmaWr(context, request->id, context->proxyId, qpNum, wr->wr_id,
+    ncclTelemetryRecordRdmaWr(context, request->telemetryGeneration, context->proxyId, qpNum, wr->wr_id,
       wr->opcode, wr->send_flags, wr->num_sge, bytes, wr->wr.rdma.remote_addr,
       wr->wr.rdma.rkey, wr->imm_data);
     for (int s = 0; s < wr->num_sge; ++s) {
-      ncclTelemetryRecordRdmaSge(context, request->id, context->proxyId, qpNum,
+      ncclTelemetryRecordRdmaSge(context, request->telemetryGeneration, context->proxyId, qpNum,
         wr->wr_id, s, wr->sg_list[s].addr, wr->sg_list[s].length,
         wr->sg_list[s].lkey);
     }
@@ -92,7 +116,7 @@ static inline void ncclIbRecordQpDepth(struct ncclIbRequest* request,
   uint32_t outstanding = uint32_t(std::min<uint64_t>(outstandingWrs, UINT32_MAX));
   for (int i = 0; i < request->telemetryContextCount; ++i) {
     const ncclTelemetryNetRequestContext* context = request->telemetryContexts + i;
-    ncclTelemetryRecordRdmaQpDepth(context, request->id, context->proxyId, qp->qp->qp_num,
+    ncclTelemetryRecordRdmaQpDepth(context, request->telemetryGeneration, context->proxyId, qp->qp->qp_num,
       phase, outstanding, postedBytes, completedBytes, uint32_t(postedWrs),
       uint32_t(completedWrs));
   }
@@ -122,7 +146,7 @@ static inline void ncclIbFlushPollTelemetry(struct ncclIbRequest* request, int d
   if (!ncclIbTelemetryDetailed(request) || request->telemetryPollCalls[devIndex] == 0) return;
   uint64_t cqId = uint64_t(uintptr_t(cq));
   for (int i = 0; i < request->telemetryContextCount; ++i) {
-    ncclTelemetryRecordRdmaCqPoll(request->telemetryContexts + i, request->id, cqId,
+    ncclTelemetryRecordRdmaCqPoll(request->telemetryContexts + i, request->telemetryGeneration, cqId,
       request->telemetryPollWindowStartNs[devIndex], request->telemetryPollCalls[devIndex],
       request->telemetryPollEmpty[devIndex], request->telemetryPollReturned[devIndex],
       request->telemetryPollBusyNs[devIndex]);
@@ -140,6 +164,7 @@ ncclResult_t ncclIbGetRequest(struct ncclIbNetCommBase* base, struct ncclIbReque
     if (r->type == NCCL_NET_IB_REQ_UNUSED) {
       r->base = base;
       r->sock = NULL;
+      r->telemetryGeneration = telemetryRequestGenerations.fetch_add(1, std::memory_order_relaxed);
       memset(r->devBases, 0, sizeof(r->devBases));
       memset(r->events, 0, sizeof(r->events));
       r->telemetryContextCount = uint8_t(ncclTelemetryGetNetRequestContexts(
@@ -370,7 +395,7 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
       currWr = currWr->next;
     }
 #endif // ENABLE_TRACE
-    NCCLCHECK(wrap_ibv_post_send(qp->qp, comm->wrs, &bad_wr));
+    NCCLCHECK(ncclIbPostSendTelemetry(nreqs > 0 ? reqs[0] : NULL, qp->qp, comm->wrs));
     uint32_t postedWrs = 0;
     uint64_t postedBytes = 0;
     for (int r = 0; r < nreqs; r++) {
@@ -563,7 +588,7 @@ ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, struct ncclIbRequest* r
   TRACE(NCCL_NET, "NET/IB: %s: Posting a CTS (req=%p, comm=%p, id=%ld, slot=%d, nreqs=%d, wr_id=%ld, opcode=%d, send_flags=%d, qp_num=%u)", __func__, req, req->base, req->id, slot, req->nreqs, wr.wr_id, wr.opcode, wr.send_flags, ctsQp->qp->qp_num);
 
   struct ibv_send_wr* bad_wr;
-  NCCLCHECK(wrap_ibv_post_send(ctsQp->qp, &wr, &bad_wr));
+  NCCLCHECK(ncclIbPostSendTelemetry(req, ctsQp->qp, &wr));
   // CTS belongs to the receive request, but its occasionally-signaled SQ
   // batching can outlive that request. Record its WR/SGE shape without
   // claiming request-owned QP retirement.
@@ -723,7 +748,7 @@ ncclResult_t ncclIbIflush(void* recvComm, int n, void** data, int* sizes, void**
     TRACE(NCCL_NET, "NET/IB: %s: Posting a flush request (req=%p, comm=%p, wr_id=%ld)", __func__, req, req->base, wr.wr_id);
     TIME_START(4);
     struct ibv_send_wr* bad_wr;
-    NCCLCHECK(wrap_ibv_post_send(comm->devs[i].gpuFlush.qp.qp, &wr, &bad_wr));
+    NCCLCHECK(ncclIbPostSendTelemetry(req, comm->devs[i].gpuFlush.qp.qp, &wr));
     TIME_STOP(4);
 
     ncclIbAddEvent(req, i);
@@ -822,7 +847,7 @@ static inline void ncclIbRecordCqeDetail(struct ncclIbRequest* request,
     uint32_t srcQp = hasReceiveMetadata ? wc->src_qp : 0;
     uint32_t wcFlags = wc->status == IBV_WC_SUCCESS ? wc->wc_flags : 0;
     uint32_t immData = hasReceiveMetadata ? wc->imm_data : 0;
-    ncclTelemetryRecordRdmaCqeDetail(request->telemetryContexts + i, request->id,
+    ncclTelemetryRecordRdmaCqeDetail(request->telemetryContexts + i, request->telemetryGeneration,
       wc->qp_num, wc->wr_id, opcode, wc->status, wc->vendor_err, srcQp,
       wcFlags, immData, byteLen);
   }

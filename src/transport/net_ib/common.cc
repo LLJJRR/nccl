@@ -131,6 +131,15 @@ void* ncclIbAsyncThreadMain(void* args) {
     struct ibv_qp* qp = event.element.qp;    // only valid if QP error
     struct ibv_srq* srq = event.element.srq; // only valid if SRQ error
     if (ncclSuccess != wrap_ibv_event_type_str(&str, event.event_type)) { break; }
+    if (event.event_type == IBV_EVENT_DEVICE_FATAL ||
+        event.event_type == IBV_EVENT_CQ_ERR ||
+        event.event_type == IBV_EVENT_QP_FATAL ||
+        event.event_type == IBV_EVENT_QP_REQ_ERR ||
+        event.event_type == IBV_EVENT_QP_ACCESS_ERR) {
+      uint32_t qpNum = qp ? qp->qp_num : 0;
+      uint64_t cqId = uint64_t(uintptr_t(cq));
+      ncclTelemetryRecordRdmaAsyncError(-1, -1, dev->portNum, event.event_type, qpNum, cqId);
+    }
     switch (event.event_type) {
     case IBV_EVENT_DEVICE_FATAL:
       // the above is device fatal error

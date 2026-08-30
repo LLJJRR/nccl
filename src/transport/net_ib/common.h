@@ -203,6 +203,8 @@ struct ncclIbRequest {
   struct ncclProfilerInfo pInfo[NCCL_NET_IB_MAX_RECVS];
 #endif
   uint64_t id;
+  // Monotonic telemetry-only identity; raw id is reused by NCCL's request pool.
+  uint64_t telemetryGeneration;
   ncclTelemetryNetRequestContext telemetryContexts[NCCL_NET_IB_MAX_RECVS];
   uint8_t telemetryContextCount;
   // Level-2 request lifecycle and completion accounting. These fields are
@@ -590,6 +592,8 @@ void ncclIbAddEvent(struct ncclIbRequest* req, int devIndex);
 ncclResult_t ncclIbGetGidIndex(struct ibv_context *context, uint8_t portNum, struct ibv_port_attr* portAttr, int *gidIndex);
 ncclResult_t ncclIbGetRequest(struct ncclIbNetCommBase* base, struct ncclIbRequest** req);
 ncclResult_t ncclIbFreeRequest(struct ncclIbRequest* r);
+ncclResult_t ncclIbPostSendTelemetry(struct ncclIbRequest* request, struct ibv_qp* qp,
+                                     struct ibv_send_wr* first);
 
 ncclResult_t ncclIbRegMrDmaBufInternal(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, void** mhandle);
 
