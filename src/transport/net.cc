@@ -1439,6 +1439,15 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
                                                sub->telemetryBytes * sub->done / sub->nsteps : 0,
                                              NCCL_TELEM_PROXY_FIRST_PROGRESS, 0);
           }
+          if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC) {
+            ncclTelemetryRecordProxyProgress(sub->telemetryProxyId, sub->telemetryCollectiveId,
+                                             sub->telemetryPlanId, proxyState->comm->rank,
+                                             sub->channelId, sub->peer, NCCL_TELEM_DIRECTION_SEND,
+                                             2, sub->telemetryBytes,
+                                             sub->telemetryBytes > 0 && sub->nsteps > 0 ?
+                                               sub->telemetryBytes * sub->done / sub->nsteps : 0,
+                                             NCCL_TELEM_PROXY_LAST_PROGRESS, 0);
+          }
           ncclTelemetryRecordTransfer(sub->telemetryCollectiveId, sub->telemetryPlanId,
                                       args->opCount, proxyState->comm->rank, sub->channelId,
                                       sub->peer, NCCL_TELEM_DIRECTION_SEND, 2, doneStepId,
@@ -1751,6 +1760,15 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
                                                sub->telemetryBytes > 0 && sub->nsteps > 0 ?
                                                  sub->telemetryBytes * sub->done / sub->nsteps : 0,
                                                NCCL_TELEM_PROXY_FIRST_PROGRESS, 0);
+            }
+            if (ncclTelemetryLevel() >= NCCL_TELEM_DIAGNOSTIC) {
+              ncclTelemetryRecordProxyProgress(sub->telemetryProxyId, sub->telemetryCollectiveId,
+                                               sub->telemetryPlanId, proxyState->comm->rank,
+                                               sub->channelId, sub->peer, NCCL_TELEM_DIRECTION_RECV,
+                                               2, sub->telemetryBytes,
+                                               sub->telemetryBytes > 0 && sub->nsteps > 0 ?
+                                                 sub->telemetryBytes * sub->done / sub->nsteps : 0,
+                                               NCCL_TELEM_PROXY_LAST_PROGRESS, 0);
             }
             ncclTelemetryRecordTransfer(sub->telemetryCollectiveId, sub->telemetryPlanId,
                                         args->opCount, proxyState->comm->rank, sub->channelId,

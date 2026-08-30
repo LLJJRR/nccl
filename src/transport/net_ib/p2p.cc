@@ -48,13 +48,25 @@ static inline uint64_t ncclIbTelemetryNowNs() {
 ncclResult_t ncclIbPostSendTelemetry(struct ncclIbRequest* request,
                                      struct ibv_qp* qp,
                                      struct ibv_send_wr* first) {
+  return ncclIbPostSendTelemetryOwners(&request, request ? 1 : 0, qp, first);
+}
+
+ncclResult_t ncclIbPostSendTelemetryOwners(struct ncclIbRequest** requests, int count,
+                                            struct ibv_qp* qp,
+                                            struct ibv_send_wr* first) {
   struct ibv_send_wr* badWr = NULL;
   uint32_t attempted = 0;
   for (struct ibv_send_wr* wr = first; wr != NULL; wr = wr->next) attempted++;
   uint64_t begin = ncclIbTelemetryNowNs();
-  ncclResult_t result = wrap_ibv_post_send(qp, first, &badWr);
+  int rawStatus = qp->context->ops.post_send(qp, first, &badWr);
+  ncclResult_t result = rawStatus == IBV_SUCCESS ? ncclSuccess : ncclSystemError;
+  if (rawStatus != IBV_SUCCESS)
+    WARN("ibv_post_send() failed with error %s, Bad WR %p, First WR %p",
+         strerror(rawStatus), badWr, first);
   uint64_t end = ncclIbTelemetryNowNs();
-  if (request != NULL && request->telemetryContextCount != 0) {
+  for (int owner = 0; owner < count; ++owner) {
+    struct ncclIbRequest* request = requests[owner];
+    if (request == NULL || request->telemetryContextCount == 0) continue;
     uint32_t posted = result == ncclSuccess ? attempted : 0;
     if (badWr != NULL) {
       posted = 0;
@@ -63,7 +75,7 @@ ncclResult_t ncclIbPostSendTelemetry(struct ncclIbRequest* request,
     for (int i = 0; i < request->telemetryContextCount; ++i)
       ncclTelemetryRecordRdmaPost(request->telemetryContexts + i,
         request->telemetryGeneration, qp ? qp->qp_num : 0, attempted, posted,
-        begin, end, int(result), badWr ? badWr->wr_id : 0);
+        begin, end, rawStatus, badWr ? badWr->wr_id : 0);
   }
   return result;
 }
@@ -395,7 +407,7 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
       currWr = currWr->next;
     }
 #endif // ENABLE_TRACE
-    NCCLCHECK(ncclIbPostSendTelemetry(nreqs > 0 ? reqs[0] : NULL, qp->qp, comm->wrs));
+    NCCLCHECK(ncclIbPostSendTelemetryOwners(reqs, nreqs, qp->qp, comm->wrs));
     uint32_t postedWrs = 0;
     uint64_t postedBytes = 0;
     for (int r = 0; r < nreqs; r++) {

@@ -594,6 +594,8 @@ ncclResult_t ncclIbGetRequest(struct ncclIbNetCommBase* base, struct ncclIbReque
 ncclResult_t ncclIbFreeRequest(struct ncclIbRequest* r);
 ncclResult_t ncclIbPostSendTelemetry(struct ncclIbRequest* request, struct ibv_qp* qp,
                                      struct ibv_send_wr* first);
+ncclResult_t ncclIbPostSendTelemetryOwners(struct ncclIbRequest** requests, int count,
+                                            struct ibv_qp* qp, struct ibv_send_wr* first);
 
 ncclResult_t ncclIbRegMrDmaBufInternal(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, uint64_t mrFlags, void** mhandle);
 
