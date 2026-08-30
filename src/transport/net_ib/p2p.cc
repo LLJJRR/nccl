@@ -850,7 +850,10 @@ static inline void ncclIbRetireSqBatch(struct ncclIbRequest* request,
   struct ncclIbQp* qp = ncclIbFindTelemetryQp(request, wc->qp_num);
   if (qp == NULL) return;
   for (int i = 0; i < request->telemetryRetireCount; ++i) {
-    if (request->telemetryRetireQpNum[i] != wc->qp_num) continue;
+    // A request can be retransmitted on the same QP. Skip batches already
+    // retired so a later CQE reaches the next batch for that QP.
+    if (request->telemetryRetireQpNum[i] != wc->qp_num ||
+        request->telemetryRetireWrs[i] == 0) continue;
     qp->telemetrySqCompletedWrs += request->telemetryRetireWrs[i];
     qp->telemetrySqCompletedBytes += request->telemetryRetireBytes[i];
     request->telemetryCompletedBytes = std::min(request->telemetryExpectedBytes,
